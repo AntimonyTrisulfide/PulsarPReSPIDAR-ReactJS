@@ -12,6 +12,10 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const buildApiUrl = (path: string, params?: URLSearchParams) =>
+  params ? `${API_BASE_URL}${path}?${params.toString()}` : `${API_BASE_URL}${path}`;
+
 const prefersDark = () => {
   if (typeof window === "undefined") return false;
   try {
@@ -169,7 +173,7 @@ const App: React.FC = () => {
         on_pulse_end: String(endPhaseAitoff),
       });
       try {
-        const response = await fetch(`http://localhost:8000/poincare_sphere_aitoff_fixedphase?${params.toString()}`, {
+        const response = await fetch(buildApiUrl("/poincare_sphere_aitoff_fixedphase", params), {
           method: "POST",
           body: formData,
         });
@@ -200,7 +204,7 @@ const App: React.FC = () => {
         end_phase: String(endPhaseProfiles),
       });
       try {
-        const response = await fetch(`http://localhost:8000/export_profiles?${params.toString()}`, {
+        const response = await fetch(buildApiUrl("/export_profiles", params), {
           method: "POST",
           body: formData,
         });
@@ -325,7 +329,7 @@ const App: React.FC = () => {
       end_phase: String(endPhaseHeatmaps),
     });
     try {
-      const response = await fetch(`http://localhost:8000/export_heatmaps?${params.toString()}`, {
+      const response = await fetch(buildApiUrl("/export_heatmaps", params), {
         method: "POST",
         body: formData,
       });
@@ -364,7 +368,7 @@ const App: React.FC = () => {
         quantity: q,
       });
       try {
-        const response = await fetch(`http://localhost:8000/polarisation_histogram?${params.toString()}`, {
+        const response = await fetch(buildApiUrl("/polarisation_histogram", params), {
           method: "POST",
           body: formData,
         });
@@ -400,7 +404,7 @@ const App: React.FC = () => {
       on_pulse_end: String(endPhasePolStacks),
     });
     try {
-      const response = await fetch(`http://localhost:8000/polarisation_stacks?${params.toString()}`, {
+      const response = await fetch(buildApiUrl("/polarisation_stacks", params), {
         method: "POST",
         body: formData,
       });
@@ -439,7 +443,7 @@ const App: React.FC = () => {
     });
 
     try {
-      const response = await fetch(`http://localhost:8000/polarisation_preprocess?${params.toString()}`, {
+      const response = await fetch(buildApiUrl("/polarisation_preprocess", params), {
         method: "POST",
         body: formData,
       });
@@ -480,7 +484,7 @@ const App: React.FC = () => {
     });
 
     try {
-      const response = await fetch(`http://localhost:8000/phase_slice_histograms?${params.toString()}`, {
+      const response = await fetch(buildApiUrl("/phase_slice_histograms", params), {
         method: "POST",
         body: formData,
       });
