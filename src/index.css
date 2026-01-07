@@ -1,0 +1,197 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 35 65% 97%;
+    --foreground: 232 24% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 232 24% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 232 24% 12%;
+    --primary: 265 68% 55%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 187 55% 90%;
+    --secondary-foreground: 232 24% 22%;
+    --muted: 32 50% 93%;
+    --muted-foreground: 232 16% 42%;
+    --accent: 330 62% 67%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 7 72% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 28 28% 86%;
+    --input: 28 32% 90%;
+    --ring: 265 68% 55%;
+    --radius: 0.85rem;
+    font-size: 18px;
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 220 18% 8%;
+    --foreground: 215 24% 92%;
+    --card: 220 16% 12%;
+    --card-foreground: 215 24% 92%;
+    --popover: 220 16% 12%;
+    --popover-foreground: 215 24% 92%;
+    --primary: 198 82% 60%;
+    --primary-foreground: 220 18% 10%;
+    --secondary: 215 22% 18%;
+    --secondary-foreground: 215 24% 92%;
+    --muted: 218 14% 16%;
+    --muted-foreground: 220 10% 70%;
+    --accent: 268 65% 63%;
+    --accent-foreground: 220 18% 10%;
+    --destructive: 355 72% 55%;
+    --destructive-foreground: 220 18% 10%;
+    --border: 216 16% 24%;
+    --input: 216 18% 28%;
+    --ring: 198 82% 60%;
+    --radius: 0.85rem;
+    color-scheme: dark;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    min-height: 100vh;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+    font-family: "Space Grotesk", "Syne", sans-serif;
+    position: relative;
+    background-image: linear-gradient(135deg, hsl(var(--background)) 0%, hsl(var(--muted)/0.55) 50%, hsl(var(--background)) 100%);
+    transition: background-color 240ms ease, color 240ms ease;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background: radial-gradient(circle at 12% 18%, hsl(var(--accent)/0.12), transparent 42%),
+      radial-gradient(circle at 78% 10%, hsl(var(--ring)/0.1), transparent 40%),
+      radial-gradient(circle at 30% 88%, hsl(var(--primary)/0.08), transparent 45%);
+    filter: blur(0px);
+    pointer-events: none;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -3;
+    background: linear-gradient(120deg, color-mix(in srgb, hsl(var(--muted)) 70%, hsl(var(--background)) 30%) 0%, transparent 45%),
+      linear-gradient(300deg, color-mix(in srgb, hsl(var(--secondary)) 60%, transparent 40%) 0%, transparent 55%);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  ::selection {
+    background: hsl(var(--primary)/0.22);
+    color: hsl(var(--primary-foreground));
+  }
+
+  a,
+  button,
+  input,
+  select,
+  textarea {
+    transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 220ms ease, transform 200ms ease;
+  }
+
+  input[type="number"][data-slot="input"]::-webkit-inner-spin-button,
+  input[type="number"][data-slot="input"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type="number"][data-slot="input"] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  [data-slot="card"] {
+    background: linear-gradient(160deg, hsl(var(--card)) 0%, color-mix(in srgb, hsl(var(--card)) 80%, hsl(var(--muted)) 20%) 100%);
+    color: hsl(var(--card-foreground));
+    border-radius: var(--radius);
+    border: 1px solid hsl(var(--border));
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+    animation: soft-appear 420ms ease both;
+  }
+
+  [data-slot="card"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.12);
+    border-color: hsl(var(--border));
+  }
+
+  .card-surface {
+    background: linear-gradient(160deg, hsl(var(--card)) 0%, color-mix(in srgb, hsl(var(--card)) 78%, hsl(var(--secondary)) 22%) 100%);
+    color: hsl(var(--card-foreground));
+    border-radius: var(--radius);
+    border: 1px solid hsl(var(--border));
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.1);
+    animation: soft-appear 420ms ease both;
+  }
+
+  .bg-card { background: hsl(var(--card)); }
+  .bg-input { background: hsl(var(--input)); }
+  .bg-muted { background: hsl(var(--muted)); }
+  .bg-accent { background: hsl(var(--accent)); }
+
+  .text-foreground { color: hsl(var(--foreground)); }
+  .text-muted-foreground { color: hsl(var(--muted-foreground)); }
+  .text-card-foreground { color: hsl(var(--card-foreground)); }
+  .text-accent { color: hsl(var(--accent)); }
+  .text-primary-foreground { color: hsl(var(--primary-foreground)); }
+
+  .bg-primary { background: hsl(var(--primary)); }
+  .bg-destructive { background: hsl(var(--destructive)); }
+  .text-destructive-foreground { color: hsl(var(--destructive-foreground)); }
+
+  .hover\:bg-destructive\/90:hover { background-color: color-mix(in srgb, hsl(var(--destructive)) 90%, transparent); }
+  .dark\:bg-destructive\/60.dark .bg-destructive\/60 { background-color: color-mix(in srgb, hsl(var(--destructive)) 60%, transparent); }
+
+  .border-input { border-color: hsl(var(--input)); }
+
+  a.text-accent:hover { filter: brightness(0.96); }
+}
+
+@keyframes soft-appear {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aurora-drift {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(2%, -1%, 0) rotate(1deg);
+  }
+  100% {
+    transform: translate3d(-2%, 1%, 0) rotate(-1deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
