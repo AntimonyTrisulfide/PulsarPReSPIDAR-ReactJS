@@ -184,6 +184,9 @@ const App: React.FC = () => {
         setPoincareAitoffData(result);
       } catch (err) {
         console.error("Error fetching Poincaré Aitoff data:", err);
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }
       }
     };
 
@@ -212,6 +215,9 @@ const App: React.FC = () => {
         const result = await response.json();
         console.log("Profiles data:", result);
         if (result._debug) console.info("server debug:", result._debug);
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }
         setProfilesData(result);
       } catch (err) {
         console.error("Error fetching profiles data:", err);
@@ -345,8 +351,9 @@ const App: React.FC = () => {
       const result = await response.json();
       console.log("Heatmaps data:", result);
       if (result._debug) console.info("server debug:", result._debug);
-      setHeatmapsData(result);
-    } catch (err) {
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }} catch (err) {
       console.error("Error fetching heatmaps data:", err);
     }
   };
@@ -419,8 +426,9 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Failed to fetch polarisation stacks");
       const result = await response.json();
       console.log("Polarisation stacks data:", result);
-      if (result && (result as any)._debug) console.info("server debug:", (result as any)._debug);
-      setPolStacksData(result);
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }  setPolStacksData(result);
     } catch (err) {
       console.error("Error fetching polarisation stacks:", err);
     }
@@ -499,8 +507,9 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Failed to fetch phase-slice histograms");
       const result = await response.json();
       console.log("Phase-slice histogram data:", result);
-      if (result._debug) console.info("server debug:", result._debug);
-      setPhaseHistogramData(result);
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }  setPhaseHistogramData(result);
     } catch (err) {
       console.error("Error fetching phase-slice histograms:", err);
     }
@@ -509,15 +518,31 @@ const App: React.FC = () => {
 
 
   // Auto-fetch plots after a file is loaded and when phase ranges change.
+  // Stagger requests to avoid overwhelming the backend (512MB RAM limit)
   useEffect(() => {
     if (!file) return;
-    // initial load for all plots
-    fetchProfilesData();
-    fetchHeatmapsData();
-    fetchPoincareAitoffData();
-    fetchPhaseSliceHistograms();
-    fetchPolarisationHistograms();
-    fetchPolarisationStacks();
+    
+    // Fetch sequentially with delays to reduce server load
+    const fetchSequentially = async () => {
+      await fetchProfilesData();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      await fetchHeatmapsData();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      await fetchPoincareAitoffData();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      await fetchPhaseSliceHistograms();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      await fetchPolarisationHistograms();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      await fetchPolarisationStacks();
+    };
+    
+    fetchSequentially();
   }, [file]);
 
   // Re-fetch profiles when its phase range changes

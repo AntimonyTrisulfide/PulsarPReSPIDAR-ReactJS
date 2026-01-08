@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition } from "react";
+import React, { useMemo, useState, useEffect, useCallback, useRef, memo, lazy, Suspense, useTransition } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
 
@@ -163,7 +163,7 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
   const [fullscreen, setFullscreen] = useState<null | "left" | "right" | "custom">(null);
   const [xAxisKey, setXAxisKey] = useState<AxisKey>("phase");
   const [yAxisKey, setYAxisKey] = useState<AxisKey>("p_frac");
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
   const rafRef = useRef<number | null>(null);
   const lastMoveTs = useRef<number>(0);
   const resizeEventRaf = useRef<number | null>(null);
@@ -386,6 +386,10 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
   // Cache selected axis data to avoid recalculation
   const selectedXData = useMemo(() => axisMap[xAxisKey] ?? [], [axisMap, xAxisKey]);
   const selectedYData = useMemo(() => axisMap[yAxisKey] ?? [], [axisMap, yAxisKey]);
+  const hasCustomData = useMemo(
+    () => selectedXData.length > 0 && selectedYData.length > 0,
+    [selectedXData.length, selectedYData.length]
+  );
 
   // Get axis labels efficiently
   const xAxisLabel = useMemo(
@@ -705,22 +709,9 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
 export default memo(PolarisationDualView);
 
 // Cache the sphere surface to avoid recalculation
-interface SphereData {
-  type: "surface";
-  x: number[][];
-  y: number[][];
-  z: number[][];
-  opacity: number;
-  showscale: boolean;
-  colorscale: any;
-  hoverinfo: "skip";
-  showlegend: boolean;
-  name: string;
-}
+const sphereCache = new Map<number, ReturnType<typeof getUnitSphereSurface>>();
 
-const sphereCache = new Map<number, SphereData>();
-
-function getUnitSphereSurface(steps: number): SphereData {
+function getUnitSphereSurface(steps: number) {
   if (sphereCache.has(steps)) {
     return sphereCache.get(steps)!;
   }
