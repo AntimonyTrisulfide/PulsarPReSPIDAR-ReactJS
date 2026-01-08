@@ -215,12 +215,12 @@ const App: React.FC = () => {
         const result = await response.json();
         console.log("Profiles data:", result);
         if (result._debug) console.info("server debug:", result._debug);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }
         setProfilesData(result);
       } catch (err) {
         console.error("Error fetching profiles data:", err);
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+        }
       }
     };
   // Handle URL load (fetch file as Blob and store in state)
@@ -351,10 +351,11 @@ const App: React.FC = () => {
       const result = await response.json();
       console.log("Heatmaps data:", result);
       if (result._debug) console.info("server debug:", result._debug);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }} catch (err) {
+    } catch (err) {
       console.error("Error fetching heatmaps data:", err);
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+      }
     }
   };
 
@@ -426,11 +427,12 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Failed to fetch polarisation stacks");
       const result = await response.json();
       console.log("Polarisation stacks data:", result);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }  setPolStacksData(result);
+      setPolStacksData(result);
     } catch (err) {
       console.error("Error fetching polarisation stacks:", err);
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+      }
     }
   };
 
@@ -507,11 +509,12 @@ const App: React.FC = () => {
       if (!response.ok) throw new Error("Failed to fetch phase-slice histograms");
       const result = await response.json();
       console.log("Phase-slice histogram data:", result);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }  setPhaseHistogramData(result);
+      setPhaseHistogramData(result);
     } catch (err) {
       console.error("Error fetching phase-slice histograms:", err);
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
+      }
     }
   };
 
