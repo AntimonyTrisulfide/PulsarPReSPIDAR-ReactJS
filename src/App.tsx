@@ -224,13 +224,21 @@ const App: React.FC = () => {
       return;
     }
     try {
-      // If the URL points to the MeerTime server, route through the dev proxy at /api
+      // If the URL points to the MeerTime server, route through proxy
       const meerTimeHost = "psrweb.jb.man.ac.uk";
       let fetchUrl = url;
       try {
         const parsed = new URL(url);
         if (parsed.host === meerTimeHost) {
-          fetchUrl = url.replace(/^https?:\/\/[^/]+/, "/api");
+          // In dev: use Vite proxy at /api
+          // In prod: use FastAPI backend proxy
+          if (import.meta.env.DEV) {
+            fetchUrl = url.replace(/^https?:\/\/[^/]+/, "/api");
+          } else {
+            // Route through FastAPI backend
+            const apiBase = import.meta.env.VITE_API_BASE_URL || "";
+            fetchUrl = `${apiBase}/proxy?url=${encodeURIComponent(url)}`;
+          }
         }
       } catch (e) {
         // leave fetchUrl as-is if URL parsing fails
