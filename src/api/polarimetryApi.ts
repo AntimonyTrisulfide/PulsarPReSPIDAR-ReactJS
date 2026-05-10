@@ -4,6 +4,7 @@ export const DEFAULT_MEERTIME_NPZ_URL =
 export const POLARISATION_QUANTITIES = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA", "I", "dPA"] as const;
 
 export const POLARIMETRY_ENDPOINTS = {
+  prepareDataset: "/prepare_dataset",
   poincareAitoffFixedPhase: "/poincare_sphere_aitoff_fixedphase",
   profiles: "/export_profiles",
   heatmaps: "/export_heatmaps",
@@ -44,6 +45,22 @@ export type RemoteFileLoadResult = {
   metadata: ObservationMetadata | null;
 };
 
+export type PreparedDatasetSource = {
+  dataKey: string;
+  fallbackFile?: File | Blob | null;
+};
+
+export type DatasetSource = File | Blob | PreparedDatasetSource;
+
+export type PreparedDatasetResult = {
+  data_key: string;
+  filename: string;
+  shape: number[];
+  dtype: string;
+  on_pulse: PhaseRange;
+  cache_items?: Record<string, number>;
+};
+
 export function isInvalidPhaseRange(start: number, end: number) {
   return start > end;
 }
@@ -52,9 +69,17 @@ function buildApiUrl(path: string, params?: URLSearchParams) {
   return params ? `${API_BASE_URL}${path}?${params.toString()}` : `${API_BASE_URL}${path}`;
 }
 
-async function postFileJson<T>(path: string, file: File | Blob, params: URLSearchParams): Promise<T> {
+function isPreparedDatasetSource(source: DatasetSource): source is PreparedDatasetSource {
+  return typeof source === "object" && "dataKey" in source;
+}
+
+async function postDatasetJson<T>(path: string, source: DatasetSource, params: URLSearchParams): Promise<T> {
   const formData = new FormData();
-  formData.append("file", file);
+  if (isPreparedDatasetSource(source)) {
+    params.set("data_key", source.dataKey);
+  } else {
+    formData.append("file", source);
+  }
   const requestUrl = buildApiUrl(path, params);
 
   const response = await fetch(requestUrl, {
@@ -63,16 +88,44 @@ async function postFileJson<T>(path: string, file: File | Blob, params: URLSearc
   });
 
   if (!response.ok) {
+    if (response.status === 404 && isPreparedDatasetSource(source) && source.fallbackFile) {
+      const retryParams = new URLSearchParams(params);
+      retryParams.delete("data_key");
+      return postDatasetJson(path, source.fallbackFile, retryParams);
+    }
     throw new Error(`Request failed: ${path} (${response.status}) via ${requestUrl}`);
   }
 
   return response.json() as Promise<T>;
 }
 
-export async function fetchPoincareAitoffData(file: File | Blob, phaseValue: number, onPulse: PhaseRange) {
-  return postFileJson(
+export async function prepareDataset(file: File | Blob, onPulse: PhaseRange): Promise<PreparedDatasetResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const requestUrl = buildApiUrl(
+    POLARIMETRY_ENDPOINTS.prepareDataset,
+    new URLSearchParams({
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
+    }),
+  );
+
+  const response = await fetch(requestUrl, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Dataset preparation failed (${response.status}) via ${requestUrl}`);
+  }
+
+  return response.json() as Promise<PreparedDatasetResult>;
+}
+
+export async function fetchPoincareAitoffData(source: DatasetSource, phaseValue: number, onPulse: PhaseRange) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.poincareAitoffFixedPhase,
-    file,
+    source,
     new URLSearchParams({
       phase_value: String(phaseValue),
       on_pulse_start: String(onPulse.start),
@@ -81,10 +134,10 @@ export async function fetchPoincareAitoffData(file: File | Blob, phaseValue: num
   );
 }
 
-export async function fetchProfilesData(file: File | Blob, phaseRange: PhaseRange) {
-  return postFileJson(
+export async function fetchProfilesData(source: DatasetSource, phaseRange: PhaseRange) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.profiles,
-    file,
+    source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
@@ -92,10 +145,10 @@ export async function fetchProfilesData(file: File | Blob, phaseRange: PhaseRang
   );
 }
 
-export async function fetchHeatmapsData(file: File | Blob, phaseRange: PhaseRange) {
-  return postFileJson(
+export async function fetchHeatmapsData(source: DatasetSource, phaseRange: PhaseRange) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.heatmaps,
-    file,
+    source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
@@ -103,10 +156,10 @@ export async function fetchHeatmapsData(file: File | Blob, phaseRange: PhaseRang
   );
 }
 
-export async function fetchPolarisationHistogram(file: File | Blob, quantity: string, phaseRange: PhaseRange) {
-  return postFileJson(
+export async function fetchPolarisationHistogram(source: DatasetSource, quantity: string, phaseRange: PhaseRange) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationHistogram,
-    file,
+    source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
@@ -117,13 +170,13 @@ export async function fetchPolarisationHistogram(file: File | Blob, quantity: st
   );
 }
 
-export async function fetchPolarisationHistograms(file: File | Blob, phaseRange: PhaseRange) {
+export async function fetchPolarisationHistograms(source: DatasetSource, phaseRange: PhaseRange) {
   const results: Record<string, unknown> = {};
   let successCount = 0;
 
   for (const quantity of POLARISATION_QUANTITIES) {
     try {
-      results[quantity] = await fetchPolarisationHistogram(file, quantity, phaseRange);
+      results[quantity] = await fetchPolarisationHistogram(source, quantity, phaseRange);
       successCount += 1;
     } catch (error) {
       console.error(`Error fetching polarisation histogram ${quantity}:`, error);
@@ -138,10 +191,10 @@ export async function fetchPolarisationHistograms(file: File | Blob, phaseRange:
   return results;
 }
 
-export async function fetchPolarisationStacks(file: File | Blob, phaseRange: PhaseRange) {
-  return postFileJson(
+export async function fetchPolarisationStacks(source: DatasetSource, phaseRange: PhaseRange) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationStacks,
-    file,
+    source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
@@ -151,23 +204,24 @@ export async function fetchPolarisationStacks(file: File | Blob, phaseRange: Pha
   );
 }
 
-export async function fetchPolarisationParams(file: File | Blob, phaseRange: PhaseRange, onPulse: PhaseRange) {
-  return postFileJson(
+export async function fetchPolarisationParams(source: DatasetSource, phaseRange: PhaseRange, onPulse: PhaseRange, maxPulses = 0) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationPreprocess,
-    file,
+    source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
       on_pulse_start: String(onPulse.start),
       on_pulse_end: String(onPulse.end),
+      max_pulses: String(maxPulses),
     }),
   );
 }
 
-export async function fetchPhaseSliceHistograms(file: File | Blob, phases: { left: number; mid: number; right: number }) {
-  return postFileJson(
+export async function fetchPhaseSliceHistograms(source: DatasetSource, phases: { left: number; mid: number; right: number }) {
+  return postDatasetJson(
     POLARIMETRY_ENDPOINTS.phaseSliceHistograms,
-    file,
+    source,
     new URLSearchParams({
       left_phase: String(phases.left),
       mid_phase: String(phases.mid),

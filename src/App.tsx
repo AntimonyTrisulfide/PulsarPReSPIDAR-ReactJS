@@ -30,6 +30,8 @@ import {
   fetchProfilesData as requestProfilesData,
   isInvalidPhaseRange,
   loadRemoteNpz,
+  prepareDataset as requestPrepareDataset,
+  type DatasetSource,
   type ObservationMetadata,
 } from "@/api/polarimetryApi";
 import { useThemePreference } from "@/hooks/useThemePreference";
@@ -106,6 +108,8 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [obsMetadata, setObsMetadata] = useState<ObservationMetadata | null>(null);
   const [isLoadingRemoteFile, setIsLoadingRemoteFile] = useState(false);
+  const [isPreparingBackendDataset, setIsPreparingBackendDataset] = useState(false);
+  const [preparedDataKey, setPreparedDataKey] = useState<string | null>(null);
   const [plotRequestStates, setPlotRequestStates] = useState<Record<PlotRequestKey, PlotRequestState>>(createPlotRequestStates);
   const activePlotRequestsRef = useRef(0);
   const queuedPlotRequestsRef = useRef<QueuedPlotRequest[]>([]);
@@ -127,6 +131,12 @@ const App: React.FC = () => {
   const [endPhaseHeatmaps, setEndPhaseHeatmaps] = useState(1.0);
 
   const isInvalidRange = isInvalidPhaseRange;
+  const isPreparingInput = isLoadingRemoteFile || isPreparingBackendDataset;
+
+  const getDatasetSource = (): DatasetSource | null => {
+    if (preparedDataKey) return { dataKey: preparedDataKey, fallbackFile: file };
+    return file;
+  };
 
   const getCombinedPlotState = (...keys: PlotRequestKey[]): PlotRequestViewState => {
     const states = keys.map(key => plotRequestStates[key]);
@@ -211,9 +221,10 @@ const App: React.FC = () => {
     processPlotQueue();
   };
 
-  const applyNewFile = (incoming: File | Blob) => {
+  const applyNewFile = (incoming: File | Blob, nextPreparedDataKey: string | null = null) => {
     resetPlotRequestQueue();
     setFile(incoming);
+    setPreparedDataKey(nextPreparedDataKey);
     setObsMetadata(null);
     setPoincareAitoffData(null);
     setPhaseHistogramData(null);
@@ -237,10 +248,25 @@ const App: React.FC = () => {
     setRightPhaseHist(1.0);
   };
 
+  const prepareBackendDataset = async (incoming: File | Blob, onPulse: { start: number; end: number }) => {
+    setIsPreparingBackendDataset(true);
+    try {
+      const prepared = await requestPrepareDataset(incoming, onPulse);
+      return prepared.data_key;
+    } catch (error) {
+      console.warn("Backend dataset preparation failed; falling back to per-request upload.", error);
+      return null;
+    } finally {
+      setIsPreparingBackendDataset(false);
+    }
+  };
+
   // Handle file upload
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      applyNewFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      const dataKey = await prepareBackendDataset(selectedFile, { start: 0, end: 1 });
+      applyNewFile(selectedFile, dataKey);
     }
   };
 
@@ -260,7 +286,7 @@ const App: React.FC = () => {
     setIsDragActive(false);
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActive(false);
@@ -270,10 +296,12 @@ const App: React.FC = () => {
       console.warn("Only .npz files are supported.");
       return;
     }
-    applyNewFile(droppedFile);
+    const dataKey = await prepareBackendDataset(droppedFile, { start: 0, end: 1 });
+    applyNewFile(droppedFile, dataKey);
   };
   const fetchPoincareAitoffData = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -282,7 +310,7 @@ const App: React.FC = () => {
       return;
     }
     try {
-      const result = await requestPoincareAitoffData(file, aitoffPhase, {
+      const result = await requestPoincareAitoffData(source, aitoffPhase, {
         start: startPhaseAitoff,
         end: endPhaseAitoff,
       });
@@ -297,7 +325,8 @@ const App: React.FC = () => {
   };
 
   const fetchProfilesData = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -306,7 +335,7 @@ const App: React.FC = () => {
       return;
     }
     try {
-      const result = await requestProfilesData(file, {
+      const result = await requestProfilesData(source, {
         start: startPhaseProfiles,
         end: endPhaseProfiles,
       });
@@ -330,7 +359,8 @@ const App: React.FC = () => {
     try {
       const remoteFile = await loadRemoteNpz(url, username, password);
       const { start, end, mid } = remoteFile.onPulse;
-      applyNewFile(remoteFile.blob);
+      const dataKey = await prepareBackendDataset(remoteFile.blob, { start, end });
+      applyNewFile(remoteFile.blob, dataKey);
       setObsMetadata(remoteFile.metadata);
       setLeftPhaseHist(start);
       setMidPhaseHist(mid);
@@ -359,7 +389,8 @@ const App: React.FC = () => {
 
   // Call /export_heatmaps endpoint
   const fetchHeatmapsData = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -368,7 +399,7 @@ const App: React.FC = () => {
       return;
     }
     try {
-      const result = await requestHeatmapsData(file, {
+      const result = await requestHeatmapsData(source, {
         start: startPhaseHeatmaps,
         end: endPhaseHeatmaps,
       });
@@ -384,7 +415,8 @@ const App: React.FC = () => {
 
   // Call /polarisation_histogram endpoint for all quantities
   const fetchPolarisationHistograms = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -394,7 +426,7 @@ const App: React.FC = () => {
     }
 
     try {
-      const results = await requestPolarisationHistograms(file, {
+      const results = await requestPolarisationHistograms(source, {
         start: startPhasePolHist,
         end: endPhasePolHist,
       });
@@ -407,7 +439,8 @@ const App: React.FC = () => {
 
   // Call /polarisation_stacks endpoint
   const fetchPolarisationStacks = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -417,7 +450,7 @@ const App: React.FC = () => {
     }
 
     try {
-      const result = await requestPolarisationStacks(file, {
+      const result = await requestPolarisationStacks(source, {
         start: startPhasePolStacks,
         end: endPhasePolStacks,
       });
@@ -433,7 +466,8 @@ const App: React.FC = () => {
 
   // Call /polarisation_preprocess endpoint for derived parameters and Poincare coords
   const fetchPolarisationParams = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -448,7 +482,7 @@ const App: React.FC = () => {
 
     try {
       const result = await requestPolarisationParams(
-        file,
+        source,
         { start: startPhasePolarParams, end: endPhasePolarParams },
         { start: onPulseStartPolarParams, end: onPulseEndPolarParams },
       );
@@ -461,7 +495,8 @@ const App: React.FC = () => {
 
   // Call /phase_slice_histograms endpoint
   const fetchPhaseSliceHistograms = async () => {
-    if (!file) {
+    const source = getDatasetSource();
+    if (!source) {
       console.warn("No file selected or loaded.");
       return;
     }
@@ -472,7 +507,7 @@ const App: React.FC = () => {
     }
 
     try {
-      const result = await requestPhaseSliceHistograms(file, {
+      const result = await requestPhaseSliceHistograms(source, {
         left: leftPhaseHist,
         mid: midPhaseHist,
         right: rightPhaseHist,
@@ -683,8 +718,12 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex justify-end gap-2">
-                  <Button onClick={handleLoadFromUrl} variant="outline" disabled={isLoadingRemoteFile}>
-                    {isLoadingRemoteFile ? "Loading file..." : "Load from URL"}
+                  <Button onClick={handleLoadFromUrl} variant="outline" disabled={isPreparingInput}>
+                    {isLoadingRemoteFile
+                      ? "Loading file..."
+                      : isPreparingBackendDataset
+                        ? "Preparing backend cache..."
+                        : "Load from URL"}
                   </Button>
                 </div>
               </div>
