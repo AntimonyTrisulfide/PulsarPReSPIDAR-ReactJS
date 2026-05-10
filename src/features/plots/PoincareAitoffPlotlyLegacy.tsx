@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 type AitoffData = {
 	lon: number[];
@@ -60,12 +62,48 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 				len: 0.6,
 			},
 		},
-		hovertemplate: "Lon: %{lon:.2f}°<br>Lat: %{lat:.2f}°<extra></extra>",
-		name: "Poincaré points",
+		hovertemplate: "Lon: %{lon:.2f} deg<br>Lat: %{lat:.2f} deg<extra></extra>",
+		name: "Poincare points",
 	};
+
+	const latLabels = [];
+	for (let i = 0; i <= 6; i++) {
+		const lat = -90 + i * 30;
+		const y = 0.15 + (i / 6) * 0.7; // vertical spacing
+		latLabels.push({
+			text: `${lat} deg`,
+			x: 0.04,
+			y,
+			xref: "paper",
+			yref: "paper",
+			showarrow: false,
+			font: { color: axisColor, size: 12 },
+			xanchor: "right",
+			yanchor: "middle",
+		});
+	}
+
+	const lonLabels = [];
+	for (let i = 0; i <= 8; i++) {
+		const lon = -180 + i * 45;
+		const x = 0.1 + (i / 8) * 0.8; // horizontal spacing
+		lonLabels.push({
+			text: `${lon} deg`,
+			x,
+			y: 0.08,
+			xref: "paper",
+			yref: "paper",
+			showarrow: false,
+			font: { color: axisColor, size: 12 },
+			xanchor: "center",
+			yanchor: "top",
+		});
+	}
+
 
 	const aitoffLayout = {
 		title: undefined,
+		dragmode: false,
 		geo: {
 			projection: { type: "aitoff" },
 			showcountries: false,
@@ -76,7 +114,8 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 			lonaxis: { showgrid: true, dtick: 45 },
 			bgcolor: plotBg,
 		},
-		margin: { l: 0, r: 0, t: 40, b: 40 },
+		annotations: [...latLabels, ...lonLabels],
+		margin: { l: 70, r: 30, t: 40, b: 70 },
 		height: 480,
 		paper_bgcolor: paperBg,
 		plot_bgcolor: plotBg,
@@ -114,11 +153,12 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 			},
 		},
 		hovertemplate: "x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
-		name: "Poincaré points",
+		name: "Poincare points",
 	};
 
 	const layout3d = {
 		title: undefined,
+		dragmode: "orbit" as const,
 		scene: {
 			xaxis: { title: { text: "X" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
 			yaxis: { title: { text: "Y" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
@@ -135,13 +175,13 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 	const items = useMemo(() => ({
 		aitoff: {
 			key: "aitoff" as const,
-			title: "Poincaré Sphere (Aitoff)",
+			title: "Poincare Sphere (Aitoff)",
 			data: [aitoffTrace],
 			layout: aitoffLayout,
 		},
 		"3d": {
 			key: "3d" as const,
-			title: "Poincaré Sphere (3D)",
+			title: "Poincare Sphere (3D)",
 			data: [sphere3d, points3d],
 			layout: layout3d,
 		},
@@ -155,9 +195,11 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 
 	return (
 		<div className="grid grid-cols-1 gap-6">
-			<div className="relative border border-border/50 rounded-lg overflow-hidden p-3">
+			<div className="plot-export-scope relative border border-border/50 rounded-lg overflow-hidden p-3">
 				<div className="mb-2 flex items-center justify-between gap-2">
-					<div className="flex items-center gap-3">
+					<div className="plot-toolbar">
+						<FullscreenIconButton onClick={() => setFullscreenKey(view)} title="Fullscreen" />
+						<PlotExportButtons filename={`legacy-poincare-${currentItem.key}`} />
 						<div className="text-sm font-semibold text-foreground/90">{currentItem.title}</div>
 						<div className="inline-flex rounded-md border border-border/60 overflow-hidden">
 							<button
@@ -176,36 +218,30 @@ export default function PoincareAitoffFixed({ data, isDark }: PoincareAitoffFixe
 							</button>
 						</div>
 					</div>
-					<FullscreenIconButton onClick={() => setFullscreenKey(view)} title="Fullscreen" />
 				</div>
 				<Plot
 					data={currentItem.data}
-					layout={currentItem.layout}
+					layout={{ ...currentItem.layout, dragmode: view === "3d" ? "orbit" : false } as any}
 					style={{ width: "100%", height: "480px" }}
-					config={{ responsive: true, displayModeBar: false }}
+					config={paperPlotConfig(`legacy-poincare-${currentItem.key}`)}
+					useResizeHandler
 					key={`${themeKey}-${currentItem.key}`}
 				/>
 			</div>
 
 			{fullscreenItem && (
-				<FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]">
-					<div className="absolute right-3 top-3 z-20">
-						<button
-							type="button"
-							aria-label="Close fullscreen"
-							onClick={() => setFullscreenKey(null)}
-							className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-						>
-							×
-						</button>
-					</div>
-					<div className="h-full w-full">
+				<FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]" title={`${fullscreenItem.title} fullscreen`}>
+					<div className="plot-export-scope h-full w-full pt-8">
+						<div className="plot-toolbar mb-2">
+							<PlotExportButtons filename={`legacy-poincare-${fullscreenItem.key}-fullscreen`} />
+						</div>
 						<Plot
 							data={fullscreenItem.data}
-							layout={{ ...fullscreenItem.layout, autosize: true, height: undefined }}
+							layout={{ ...fullscreenItem.layout, autosize: true, height: undefined, dragmode: fullscreenKey === "3d" ? "orbit" : false } as any}
 							style={{ width: "100%", height: "100%" }}
-							config={{ responsive: true, displayModeBar: false }}
-							key={`${themeKey}-${fullscreenItem.key}-fs`}
+							config={paperPlotConfig(`legacy-poincare-${fullscreenItem.key}-fullscreen`)}
+							useResizeHandler
+							key={`${themeKey}-${fullscreenKey}-fs`}
 
 						/>
 					</div>

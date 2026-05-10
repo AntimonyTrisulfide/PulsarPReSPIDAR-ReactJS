@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 export type PhaseSliceHistogramData = {
   obs_id?: string;
@@ -59,11 +61,6 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
         plot_bgcolor: plotBg,
         font: { color: axisColor },
         template,
-            title: {
-              text: quantity.name,
-              x: 0.01,
-              xanchor: "left",
-            },
       };
 
       quantity.phase_slices.forEach((slice, col) => {
@@ -140,21 +137,23 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
       {items.map(item => (
         <div
           key={item.key}
-          className="relative border border-border/50 rounded-lg overflow-hidden p-3"
+          className="plot-export-scope relative border border-border/50 rounded-lg overflow-hidden p-3"
         >
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="text-sm font-semibold text-foreground/90">{item.quantity.name}</div>
+          <div className="plot-toolbar mb-1">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
+            <PlotExportButtons filename={`phase-slice-${item.quantity.name}`} />
+            <div className="text-sm font-semibold text-foreground/90">{item.quantity.name}</div>
           </div>
           {phaseWindow && (
             <div className="mb-2 text-xs text-muted-foreground">
-              Left: {phaseWindow.left.toFixed(3)} • Mid: {phaseWindow.mid.toFixed(3)} • Right: {phaseWindow.right.toFixed(3)}
+              Left: {phaseWindow.left.toFixed(3)} / Mid: {phaseWindow.mid.toFixed(3)} / Right: {phaseWindow.right.toFixed(3)}
             </div>
           )}
           <Plot
             data={item.traces}
             layout={item.layout}
-            config={{ responsive: true, displayModeBar: false }}
+            config={paperPlotConfig(`phase-slice-${item.quantity.name}`)}
+            useResizeHandler
             style={{ width: "100%", height: "260px" }}
             key={`${item.key}-inline`}
           />
@@ -162,22 +161,16 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
       ))}
 
       {fullscreenItem && (
-        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setFullscreenKey(null)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
-          <div className="h-full w-full">
+        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]" title="Phase slice fullscreen">
+          <div className="plot-export-scope h-full w-full pt-8">
+            <div className="plot-toolbar mb-2">
+              <PlotExportButtons filename={`phase-slice-${fullscreenItem.quantity.name}-fullscreen`} />
+            </div>
             <Plot
               data={fullscreenItem.traces}
               layout={{ ...fullscreenItem.layout, autosize: true, height: undefined }}
-              config={{ responsive: true, displayModeBar: false }}
+              config={paperPlotConfig(`phase-slice-${fullscreenItem.quantity.name}-fullscreen`)}
+              useResizeHandler
               style={{ width: "100%", height: "100%" }}
               key={`${fullscreenItem.key}-fs`}
             />

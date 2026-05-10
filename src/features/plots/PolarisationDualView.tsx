@@ -1,6 +1,8 @@
-import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, type CSSProperties } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 // Memoized Plot component to prevent unnecessary re-renders
 const MemoizedPlot = memo(Plot);
@@ -53,8 +55,8 @@ const CustomXYPlot = memo(function CustomXYPlot({
     
     // Only create annotations if we have data
     if (dataLength > 1) {
-      // Reuse sliced arrays to avoid multiple slices
-      for (let i = 0; i < dataLength - 1; i++) {
+      const arrowStep = Math.max(1, Math.ceil(dataLength / 48));
+      for (let i = 0; i < dataLength - 1; i += arrowStep) {
         const x0 = xData[i];
         const y0 = yData[i];
         const x1 = xData[i + 1];
@@ -87,7 +89,7 @@ const CustomXYPlot = memo(function CustomXYPlot({
     }
     
     return {
-      title: { text: "Custom XY plot" },
+      title: undefined,
       xaxis: {
         title: { text: xLabel, standoff: 8 },
         gridcolor: gridColor,
@@ -132,7 +134,8 @@ const CustomXYPlot = memo(function CustomXYPlot({
     <MemoizedPlot
       data={[trace]}
       layout={layout}
-      config={{ responsive: true }}
+      config={paperPlotConfig("custom-polarisation-xy")}
+      useResizeHandler
       style={{ width: "100%", height: "100%" }}
     />
   );
@@ -154,21 +157,23 @@ interface PolarisationDualViewProps {
   phaseAxis: number[];
   data: PolarisationDataset;
   isDark?: boolean;
+  startPhase?: number;
+  endPhase?: number;
 }
 
-function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewProps) {
+function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhase = 1 }: PolarisationDualViewProps) {
   const [mode, setMode] = useState<"aitoff" | "3d">("aitoff");
-  const [_split, setSplit] = useState(50); // committed value used for plot revisions
-  const [liveSplit, setLiveSplit] = useState(50); // immediate UI width during drag
+  const [split, setSplit] = useState(50);
   const [fullscreen, setFullscreen] = useState<null | "left" | "right" | "custom">(null);
   const [xAxisKey, setXAxisKey] = useState<AxisKey>("phase");
   const [yAxisKey, setYAxisKey] = useState<AxisKey>("p_frac");
   const [, startTransition] = useTransition();
   const rafRef = useRef<number | null>(null);
-  const lastMoveTs = useRef<number>(0);
   const resizeEventRaf = useRef<number | null>(null);
   const lastResizeTs = useRef<number>(0);
   const draggingRef = useRef(false);
+  const splitRef = useRef(50);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
   const dragStartX = useRef<number | null>(null);
   const draggedRef = useRef(false);
 
@@ -183,9 +188,10 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
   const markerColors = useMemo(() => {
     const n = data.x?.length ?? 0;
     if (n === 0) return [] as number[];
-    if (n === 1) return [0];
-    return Array.from({ length: n }, (_, i) => i / (n - 1));
-  }, [data.x?.length]);
+    if (n === 1) return [startPhase];
+    const phaseRange = endPhase - startPhase;
+    return Array.from({ length: n }, (_, i) => startPhase + (i / (n - 1)) * phaseRange);
+  }, [data.x?.length, startPhase, endPhase]);
 
   const lonLat = useMemo(() => {
     if (!data.PA?.length || !data.EA?.length) {
@@ -213,38 +219,66 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
         [5 / 6, "#ff00ff"],
         [1, "#ff0000"],
       ],
+      cmin: startPhase,
+      cmax: endPhase,
       opacity: 0.9,
       showscale: true,
       colorbar: {
-        title: { text: "Index" },
+        title: { text: "Phase" },
         orientation: "h" as const,
         y: -0.25,
         x: 0.5,
         xanchor: "center" as const,
         len: 0.6,
+        tickvals: [startPhase, endPhase],
+        ticktext: [startPhase.toFixed(2), endPhase.toFixed(2)],
       },
     },
-    hovertemplate: "Lon: %{lon:.2f}°<br>Lat: %{lat:.2f}°<extra></extra>",
-    name: "Poincaré points",
-  }), [lonLat.latDeg, lonLat.lonDeg]);
+    hovertemplate: "Lon: %{lon:.2f} deg<br>Lat: %{lat:.2f} deg<extra></extra>",
+    name: "Poincare points",
+  }), [lonLat.latDeg, lonLat.lonDeg, startPhase, endPhase]);
 
   const aitoffLayout = useMemo(() => ({
-    title: { text: "Poincaré (Aitoff)" },
+    title: undefined,
+    dragmode: false,
     geo: {
       projection: { type: "aitoff" },
+      showframe: true,
+      framecolor: axisColor,
+      framewidth: 1,
       showcountries: false,
       showcoastlines: false,
       showland: false,
       showocean: false,
-      lataxis: { showgrid: true, dtick: 30 },
-      lonaxis: { showgrid: true, dtick: 45 },
+      lataxis: {
+        showgrid: true,
+        dtick: 30,
+        range: [-90, 90],
+        tickmode: "linear",
+        showticklabels: true,
+        ticklen: 4,
+        tickcolor: gridColor,
+        gridcolor: gridColor,
+        tickfont: { color: axisColor, size: 10 },
+      },
+      lonaxis: {
+        showgrid: true,
+        dtick: 45,
+        range: [-180, 180],
+        tickmode: "linear",
+        showticklabels: true,
+        ticklen: 4,
+        tickcolor: gridColor,
+        gridcolor: gridColor,
+        tickfont: { color: axisColor, size: 10 },
+      },
       bgcolor: plotBg,
     },
-    margin: { l: 0, r: 0, t: 50, b: 40 },
+    margin: { l: 8, r: 8, t: 50, b: 42 },
     paper_bgcolor: paperBg,
     plot_bgcolor: plotBg,
     font: { color: axisColor },
-  }), [axisColor, paperBg, plotBg]);
+  }), [axisColor, gridColor, paperBg, plotBg]);
 
   const sphere3d = useMemo(() => getUnitSphereSurface(20), []);
 
@@ -273,21 +307,26 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
         [5 / 6, "#ff00ff"],
         [1, "#ff0000"],
       ],
+      cmin: startPhase,
+      cmax: endPhase,
       showscale: true,
       colorbar: {
-        title: { text: "Index" },
+        title: { text: "Phase" },
         orientation: "h" as const,
         y: -0.2,
         x: 0.5,
         len: 0.6,
+        tickvals: [startPhase, endPhase],
+        ticktext: [startPhase.toFixed(2), endPhase.toFixed(2)],
       },
     },
     hovertemplate: "x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
-    name: "Poincaré points",
-  }), [data.x, data.y, data.z, lonLat.latDeg]);
+    name: "Poincare points",
+  }), [data.x, data.y, data.z, lonLat.latDeg, startPhase, endPhase, markerColors]);
 
   const layout3d = useMemo(() => ({
-    title: { text: "Poincaré (3D)" },
+    title: undefined,
+    dragmode: "orbit" as const,
     scene: {
       xaxis: { title: { text: "X" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
       yaxis: { title: { text: "Y" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
@@ -327,7 +366,7 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
 
     // Helpful once-per-dataset log to verify sign/range being plotted
     // eslint-disable-next-line no-console
-    console.log("[PolarisationDualView] Poincaré dataset stats", payload);
+    console.log("[PolarisationDualView] Poincare dataset stats", payload);
   }, [data]);
 
   const fractionTraces = useMemo(() => ([
@@ -398,7 +437,7 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
   );
 
   const fractionsLayout = useMemo(() => ({
-    title: { text: "Polarisation Fractions & Angles" },
+    title: undefined,
     grid: { rows: 2, columns: 1, pattern: "independent" as const },
     xaxis: {
       title: { text: "Phase", standoff: 8 },
@@ -471,73 +510,86 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
     });
   }, []);
 
+  const dispatchResize = useCallback((force = false) => {
+    const now = performance.now();
+    if (!force && now - lastResizeTs.current < 48) return;
+    lastResizeTs.current = now;
+    if (resizeEventRaf.current !== null) return;
+    resizeEventRaf.current = requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+      resizeEventRaf.current = null;
+    });
+  }, []);
+
+  const applySplit = useCallback((clientX: number) => {
+    const rect = splitContainerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const next = ((clientX - rect.left) / rect.width) * 100;
+    const clamped = Math.min(74, Math.max(26, next));
+    splitRef.current = clamped;
+    splitContainerRef.current?.style.setProperty("--plot-split", `${clamped}%`);
+    dispatchResize();
+  }, [dispatchResize]);
+
   const startDrag = useCallback((clientX: number) => {
     dragStartX.current = clientX;
     draggedRef.current = false;
     draggingRef.current = true;
+    document.body.classList.add("is-resizing-plots");
   }, []);
+
   const stopDrag = useCallback(() => {
     draggingRef.current = false;
+    document.body.classList.remove("is-resizing-plots");
   }, []);
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       if (!draggingRef.current) return;
       if (dragStartX.current == null) dragStartX.current = e.clientX;
       const delta = Math.abs(e.clientX - dragStartX.current);
-      if (!draggedRef.current && delta < 4) return; // ignore tiny clicks
+      if (!draggedRef.current && delta < 4) return;
       draggedRef.current = true;
-      const now = performance.now();
-      if (now - lastMoveTs.current < 80) return; // throttle to ~12fps
-      lastMoveTs.current = now;
       if (rafRef.current !== null) return;
       rafRef.current = requestAnimationFrame(() => {
-        const percent = (e.clientX / window.innerWidth) * 100;
-        const clamped = Math.min(75, Math.max(25, percent));
-        setLiveSplit(clamped);
+        applySplit(e.clientX);
         rafRef.current = null;
       });
     };
-    const onUp = (_e: MouseEvent) => {
+    const onUp = () => {
       stopDrag();
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      lastMoveTs.current = 0;
       if (draggedRef.current) {
-        setSplit(liveSplit);
+        setSplit(splitRef.current);
+        dispatchResize(true);
       }
       dragStartX.current = null;
       draggedRef.current = false;
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.classList.remove("is-resizing-plots");
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
       if (resizeEventRaf.current !== null) cancelAnimationFrame(resizeEventRaf.current);
       resizeEventRaf.current = null;
     };
-  }, [stopDrag]);
-
-  useEffect(() => {
-    const now = performance.now();
-    if (now - lastResizeTs.current < 150) return; // throttle resize events
-    lastResizeTs.current = now;
-    if (resizeEventRaf.current !== null) cancelAnimationFrame(resizeEventRaf.current);
-    resizeEventRaf.current = requestAnimationFrame(() => {
-      window.dispatchEvent(new Event("resize"));
-      resizeEventRaf.current = null;
-    });
-  }, [liveSplit]);
+  }, [applySplit, dispatchResize, stopDrag]);
 
   const leftPlot = (
-    <div className="h-[580px] w-full">
+    <div className="plot-export-scope h-[580px] w-full">
       <div className="flex justify-between items-center mb-2">
-        <div className="text-sm font-semibold text-muted-foreground">Poincaré View</div>
+        <div className="plot-toolbar">
+          <FullscreenIconButton onClick={() => setFullscreen("left")} title="Fullscreen left" />
+          <PlotExportButtons filename="poincare-dual-view" />
+          <div className="text-sm font-semibold text-muted-foreground">Poincare View</div>
+        </div>
         <div className="flex items-center gap-2">
           <div className="inline-flex rounded-md border border-border/60 overflow-hidden">
             <button
@@ -555,56 +607,66 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
               3D
             </button>
           </div>
-          <FullscreenIconButton onClick={() => setFullscreen("left")} title="Fullscreen left" />
         </div>
       </div>
       <MemoizedPlot
         key={`poincare-${mode}`}
         data={mode === "aitoff" ? [aitoffTrace] : [sphere3d, points3d]}
-        layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d) }}
-        config={{ responsive: true }}
+        layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d), dragmode: mode === "3d" ? "orbit" : false }}
+        config={paperPlotConfig("poincare-dual-view")}
+        useResizeHandler
         style={{ width: "100%", height: "100%" }}
       />
     </div>
   );
 
   const rightPlot = (
-    <div className="h-[580px] w-full">
-      <div className="flex justify-between items-center mb-2">
-        <div className="text-sm font-semibold text-muted-foreground">Fractions and Angles</div>
+    <div className="plot-export-scope h-[580px] w-full">
+      <div className="plot-toolbar mb-2">
         <FullscreenIconButton onClick={() => setFullscreen("right")} title="Fullscreen right" />
+        <PlotExportButtons filename="polarisation-fractions-angles" />
+        <div className="text-sm font-semibold text-muted-foreground">Fractions and Angles</div>
       </div>
       <MemoizedPlot
         key={`fractions`}
         data={[...fractionTraces, ...angleTraces]}
         layout={fractionsLayout}
-        config={{ responsive: true }}
+        config={paperPlotConfig("polarisation-fractions-angles")}
+        useResizeHandler
         style={{ width: "100%", height: "100%" }}
       />
     </div>
   );
 
   const renderContent = () => (
-    <div className="relative w-full" style={{ minHeight: "640px" }}>
-      <div className="flex h-full" style={{ gap: "0.75rem" }}>
-        <div style={{ width: `${liveSplit}%` }}>{leftPlot}</div>
-        <div
-          className="w-1 cursor-col-resize bg-border/60"
-          onMouseDown={e => startDrag(e.clientX)}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize views"
-        />
-        <div style={{ width: `${100 - liveSplit}%` }}>{rightPlot}</div>
-      </div>
+    <div
+      ref={splitContainerRef}
+      className="polarimetry-split"
+      style={{ "--plot-split": `${split}%`, minHeight: "640px" } as CSSProperties}
+    >
+      <div className="split-pane split-pane-left">{leftPlot}</div>
+      <div
+        className="split-resizer"
+        onPointerDown={e => startDrag(e.clientX)}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize views"
+        aria-valuemin={26}
+        aria-valuemax={74}
+        aria-valuenow={Math.round(splitRef.current)}
+      />
+      <div className="split-pane split-pane-right">{rightPlot}</div>
     </div>
   );
 
   const customPlotCard = (
-    <div className="w-full rounded-lg border border-border/60 bg-card/60 p-4 shadow-sm">
+    <div className="plot-export-scope w-full rounded-lg border border-border/60 bg-card/60 p-4 shadow-sm">
       <div className="flex justify-between items-center mb-3">
-        <div className="text-sm font-semibold text-muted-foreground">Custom XY Plot</div>
-        <FullscreenIconButton onClick={() => setFullscreen("custom")} title="Fullscreen custom" />
+        <div className="plot-toolbar">
+          <FullscreenIconButton onClick={() => setFullscreen("custom")} title="Fullscreen custom" />
+          <PlotExportButtons filename="custom-polarisation-xy" />
+          <div className="text-sm font-semibold text-muted-foreground">Custom XY Plot</div>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
         <label className="flex flex-col gap-1 text-muted-foreground">
@@ -653,34 +715,39 @@ function PolarisationDualView({ phaseAxis, data, isDark }: PolarisationDualViewP
       {renderContent()}
       <div className="mt-6 w-full">{customPlotCard}</div>
       {fullscreen && (
-        <FullscreenOverlay onClose={() => setFullscreen(null)} contentClassName="w-[96vw] max-w-7xl h-[92vh] p-4">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setFullscreen(null)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
+        <FullscreenOverlay onClose={() => setFullscreen(null)} contentClassName="w-[96vw] max-w-7xl h-[92vh] p-4" title="Polarisation fullscreen">
           <div className="h-full w-full">
             {fullscreen === "left" ? (
-              <MemoizedPlot
-                data={mode === "aitoff" ? [aitoffTrace] : [sphere3d, points3d]}
-                layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d), autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 } }}
-                config={{ responsive: true }}
-                style={{ width: "100%", height: "100%" }}
-              />
+              <div className="plot-export-scope h-full w-full pt-8">
+                <div className="plot-toolbar mb-2">
+                  <PlotExportButtons filename="poincare-dual-view-fullscreen" />
+                </div>
+                <MemoizedPlot
+                  data={mode === "aitoff" ? [aitoffTrace] : [sphere3d, points3d]}
+                  layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d), autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 }, dragmode: mode === "3d" ? "orbit" : false }}
+                  config={paperPlotConfig("poincare-dual-view-fullscreen")}
+                  useResizeHandler
+                  style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
+                />
+              </div>
             ) : fullscreen === "right" ? (
-              <MemoizedPlot
-                data={[...fractionTraces, ...angleTraces]}
-                layout={{ ...fractionsLayout, autosize: true, height: undefined, margin: { l: 60, r: 30, t: 60, b: 80 } }}
-                config={{ responsive: true }}
-                style={{ width: "100%", height: "100%" }}
-              />
+              <div className="plot-export-scope h-full w-full pt-8">
+                <div className="plot-toolbar mb-2">
+                  <PlotExportButtons filename="polarisation-fractions-angles-fullscreen" />
+                </div>
+                <MemoizedPlot
+                  data={[...fractionTraces, ...angleTraces]}
+                  layout={{ ...fractionsLayout, autosize: true, height: undefined, margin: { l: 60, r: 30, t: 60, b: 80 } }}
+                  config={paperPlotConfig("polarisation-fractions-angles-fullscreen")}
+                  useResizeHandler
+                  style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
+                />
+              </div>
             ) : (
-              <div className="h-full w-full p-4">
+              <div className="plot-export-scope h-full w-full p-4 pt-10">
+                <div className="plot-toolbar mb-2">
+                  <PlotExportButtons filename="custom-polarisation-xy-fullscreen" />
+                </div>
                 <CustomXYPlot
                   xData={selectedXData}
                   yData={selectedYData}

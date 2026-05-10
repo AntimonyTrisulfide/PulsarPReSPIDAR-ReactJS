@@ -1,7 +1,9 @@
 
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 type Profile = { x: number[]; y: number[] };
 type HeatmapData = {
@@ -187,15 +189,16 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
       {items.map(item => (
-        <div key={item.key} className="relative border border-border/50 rounded-lg overflow-hidden p-2">
-          <div className="mb-1 flex items-center justify-between gap-2">
-			<div className="text-sm font-semibold text-foreground/90">Stokes {item.stoke}</div>
+        <div key={item.key} className="plot-export-scope relative border border-border/50 rounded-lg overflow-hidden p-2">
+          <div className="plot-toolbar mb-1">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
+            <PlotExportButtons filename={`stokes-${item.stoke}-waterfall-profile`} />
+			<div className="text-sm font-semibold text-foreground/90">Stokes {item.stoke}</div>
           </div>
           <Plot
             data={item.traces}
             layout={item.layout}
-            config={{ responsive: true, displayModeBar: false }}
+            config={paperPlotConfig(`stokes-${item.stoke}-waterfall-profile`)}
             useResizeHandler
             style={{ width: "100%", height: "580px", minWidth: 0 }}
             key={`${item.key}-inline`}
@@ -204,22 +207,16 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
       ))}
 
       {fullscreenItem && (
-        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setFullscreenKey(null)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
-          <div className="h-full w-full">
+        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]" title={`${fullscreenItem.stoke} fullscreen`}>
+          <div className="plot-export-scope h-full w-full pt-8">
+            <div className="plot-toolbar mb-2">
+              <PlotExportButtons filename={`stokes-${fullscreenItem.stoke}-waterfall-profile-fullscreen`} />
+            </div>
             <Plot
               data={fullscreenItem.traces}
               layout={{ ...fullscreenItem.layout, autosize: true, height: undefined }}
-              config={{ responsive: true, displayModeBar: false }}
+              config={paperPlotConfig(`stokes-${fullscreenItem.stoke}-waterfall-profile-fullscreen`)}
+              useResizeHandler
               style={{ width: "100%", height: "100%" }}
               key={`${fullscreenItem.key}-fs`}
             />

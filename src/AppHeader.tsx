@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 type AppHeaderProps = {
   isDark: boolean;
   onToggleTheme: () => void;
+  onOpenCatalogue: () => void;
 };
 
-export function AppHeader({ isDark, onToggleTheme }: AppHeaderProps) {
+export function AppHeader({ isDark, onToggleTheme, onOpenCatalogue }: AppHeaderProps) {
   useEffect(() => {
     try {
       const root = document.documentElement;
@@ -31,7 +32,10 @@ export function AppHeader({ isDark, onToggleTheme }: AppHeaderProps) {
               Pulsar-Polarisation REsolved Single Pulse Interactive Data AnalyseR
             </div>
           </div>
-          <div className="ml-4">
+          <div className="ml-4 space-x-2 flex">
+            <Button variant="outline" onClick={onOpenCatalogue}>
+              Browse Catalogue
+            </Button>
             <Button variant="outline" onClick={onToggleTheme}>
               {isDark ? "Light Mode" : "Dark Mode"}
             </Button>

@@ -1,0 +1,8 @@
+Added custom annotations for degree labels on Aitoff spheres: latitude on left (-90° to 90°), longitude on bottom (-180° to 180°).
+Files changed:
+- src/PoincareAitoffFIxed.tsx
+- src/PolarisationDualView.tsx
+
+Dev server at http://localhost:5174/
+
+Timestamp: 2026-01-23T00:00:00Z

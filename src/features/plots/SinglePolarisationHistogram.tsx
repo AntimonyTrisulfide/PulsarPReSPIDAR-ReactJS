@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 export type SinglePolarisationHistogramPayload = {
   obs_id?: string;
@@ -108,36 +110,32 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
   }, [data, axisColor, gridColor, paperBg, plotBg, template]);
 
   return (
-    <div className="relative" style={{ width: "100%", padding: "1rem" }}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-foreground/90">{titleText}</div>
+    <div className="plot-export-scope relative" style={{ width: "100%", padding: "1rem" }}>
+      <div className="plot-toolbar mb-2">
         <FullscreenIconButton onClick={() => setIsFullscreen(true)} title="Open fullscreen" />
+        <PlotExportButtons filename={`polarisation-histogram-${data.quantity_key}`} />
+        <div className="text-sm font-semibold text-foreground/90">{titleText}</div>
       </div>
       <Plot
         data={[trace]}
         layout={layout}
-        config={{ responsive: true, displayModeBar: false }}
+        config={paperPlotConfig(`polarisation-histogram-${data.quantity_key}`)}
+        useResizeHandler
         style={{ width: "100%", height: "500px" }}
         key={`${themeKey}-${data.quantity_key}-${data.start_phase}-${data.end_phase}`}
       />
 
       {isFullscreen && (
-        <FullscreenOverlay onClose={() => setIsFullscreen(false)} contentClassName="p-4">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setIsFullscreen(false)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
-          <div className="h-full w-full">
+        <FullscreenOverlay onClose={() => setIsFullscreen(false)} contentClassName="p-4" title={`${titleText} fullscreen`}>
+          <div className="plot-export-scope h-full w-full pt-8">
+            <div className="plot-toolbar mb-2">
+              <PlotExportButtons filename={`polarisation-histogram-${data.quantity_key}-fullscreen`} />
+            </div>
             <Plot
               data={[trace]}
               layout={{ ...layout, autosize: true, height: undefined }}
-              config={{ responsive: true, displayModeBar: false }}
+              config={paperPlotConfig(`polarisation-histogram-${data.quantity_key}-fullscreen`)}
+              useResizeHandler
               style={{ width: "100%", height: "100%" }}
               key={`${themeKey}-${data.quantity_key}-${data.start_phase}-${data.end_phase}-fs`}
             />

@@ -1,36 +1,38 @@
 import React, { useState, useEffect, useRef } from "react";
-import WaterfallProfiles from "./WaterfallProfiles";
-import PoincareAitoffFixed from "./PoincareAitoffFIxed";
-import PhaseSliceHistograms from "./PhaseSliceHistograms";
-import SinglePolarisationHistogram from "./SinglePolarisationHistogram";
-import PolarisationStacks from "./PolarisationStacks";
-import PolarisationDualView from "./PolarisationDualView";
+import WaterfallProfiles from "@/features/plots/WaterfallProfiles";
+import PoincareAitoffView from "@/features/plots/PoincareAitoffView";
+import PhaseSliceHistograms from "@/features/plots/PhaseSliceHistograms";
+import SinglePolarisationHistogram from "@/features/plots/SinglePolarisationHistogram";
+import PolarisationStacks from "@/features/plots/PolarisationStacks";
+import PolarisationDualView from "@/features/plots/PolarisationDualView";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { CatalogueModal } from "./components/CatalogueModal";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
-const buildApiUrl = (path: string, params?: URLSearchParams) =>
-  params ? `${API_BASE_URL}${path}?${params.toString()}` : `${API_BASE_URL}${path}`;
-
-const prefersDark = () => {
-  if (typeof window === "undefined") return false;
-  try {
-    const stored = localStorage.getItem("theme");
-    if (stored) return stored === "dark";
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  } catch (e) {
-    return false;
-  }
-};
+import {
+  DEFAULT_MEERTIME_NPZ_URL,
+  POLARISATION_QUANTITIES,
+  fetchHeatmapsData as requestHeatmapsData,
+  fetchPhaseSliceHistograms as requestPhaseSliceHistograms,
+  fetchPoincareAitoffData as requestPoincareAitoffData,
+  fetchPolarisationHistograms as requestPolarisationHistograms,
+  fetchPolarisationParams as requestPolarisationParams,
+  fetchPolarisationStacks as requestPolarisationStacks,
+  fetchProfilesData as requestProfilesData,
+  isInvalidPhaseRange,
+  loadRemoteNpz,
+  type ObservationMetadata,
+} from "@/api/polarimetryApi";
+import { useThemePreference } from "@/hooks/useThemePreference";
 
 const App: React.FC = () => {
-  const [isDark, setIsDark] = useState<boolean>(prefersDark);
+  const [isDark, setIsDark] = useThemePreference();
+  const [catalogueModalOpen, setCatalogueModalOpen] = useState(false);
   const [file, setFile] = useState<File | Blob | null>(null);
-  const [url, setUrl] = useState<string>("https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz");
+  const [url, setUrl] = useState<string>(DEFAULT_MEERTIME_NPZ_URL);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [poincareAitoffData, setPoincareAitoffData] = useState<any>(null);
@@ -56,11 +58,7 @@ const App: React.FC = () => {
   const [rightPhaseHist, setRightPhaseHist] = useState(1.0);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [obsMetadata, setObsMetadata] = useState<{
-    obsId: string;
-    freq: string;
-    utcStart: string;
-  } | null>(null);
+  const [obsMetadata, setObsMetadata] = useState<ObservationMetadata | null>(null);
 
   // Plot parameters
   // Per-plot phase ranges (unique to each plot)
@@ -69,31 +67,7 @@ const App: React.FC = () => {
   const [startPhaseHeatmaps, setStartPhaseHeatmaps] = useState(0.0);
   const [endPhaseHeatmaps, setEndPhaseHeatmaps] = useState(1.0);
 
-  const isInvalidRange = (start: number, end: number) => start > end;
-
-  // Extract observation ID from URL pattern and metadata
-  const extractObsId = (url: string, pipelineInfo: any): string => {
-    const match = url.match(/singlepulse\/([^\/]+)\/([^\/]+)\//);  
-    if (!match) return "Unknown";
-    
-    const pulsar = match[1];
-    const datetimeStr = match[2];
-    const dateParts = datetimeStr.split("-");
-    
-    let date = "Unknown";
-    let time = "Unknown";
-    if (dateParts.length >= 3) {
-      date = dateParts.slice(0, 3).join("-");
-      time = dateParts.slice(3).join("-");
-    } else {
-      date = datetimeStr;
-    }
-    
-    const freq = pipelineInfo?.input_data?.header?.FREQ ?? pipelineInfo?.header?.FREQ ?? 0.0;
-    const freqRounded = Number(freq).toFixed(2);
-    
-    return `Pulsar-${pulsar}_Date-${date}_Time-${time}_Obs_Freq-${freqRounded}_MHz`;
-  };
+  const isInvalidRange = isInvalidPhaseRange;
 
   const applyNewFile = (incoming: File | Blob) => {
     setFile(incoming);
@@ -154,75 +128,51 @@ const App: React.FC = () => {
     }
     applyNewFile(droppedFile);
   };
-  // All JSX above was incorrectly placed. Only the main return below should have JSX.
-    // Call /poincare_sphere_aitoff_fixedphase endpoint
-    const fetchPoincareAitoffData = async () => {
-      if (!file) {
-        console.warn("No file selected or loaded.");
-        return;
-      }
-      if (isInvalidRange(startPhaseAitoff, endPhaseAitoff)) {
-        console.warn("Fix Aitoff on-pulse start/end: start must be ≤ end.");
-        return;
-      }
-      const formData = new FormData();
-      formData.append("file", file);
-      const params = new URLSearchParams({
-        phase_value: String(aitoffPhase),
-        on_pulse_start: String(startPhaseAitoff),
-        on_pulse_end: String(endPhaseAitoff),
+  const fetchPoincareAitoffData = async () => {
+    if (!file) {
+      console.warn("No file selected or loaded.");
+      return;
+    }
+    if (isInvalidRange(startPhaseAitoff, endPhaseAitoff)) {
+      console.warn("Fix Aitoff on-pulse start/end: start must be <= end.");
+      return;
+    }
+    try {
+      const result = await requestPoincareAitoffData(file, aitoffPhase, {
+        start: startPhaseAitoff,
+        end: endPhaseAitoff,
       });
-      try {
-        const response = await fetch(buildApiUrl("/poincare_sphere_aitoff_fixedphase", params), {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) throw new Error("Failed to fetch Aitoff Poincaré data");
-        const result = await response.json();
-        console.log("Poincaré Aitoff data:", result);
-        if (result._debug) console.info("server debug:", result._debug);
-        setPoincareAitoffData(result);
-      } catch (err) {
-        console.error("Error fetching Poincaré Aitoff data:", err);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }
+      setPoincareAitoffData(result);
+    } catch (err) {
+      console.error("Error fetching Poincare Aitoff data:", err);
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
-    };
+    }
+  };
 
-    // Call /export_profiles endpoint
-    const fetchProfilesData = async () => {
-      if (!file) {
-        console.warn("No file selected or loaded.");
-        return;
-      }
-      if (isInvalidRange(startPhaseProfiles, endPhaseProfiles)) {
-        console.warn("Fix Profiles start/end phase: start must be ≤ end.");
-        return;
-      }
-      const formData = new FormData();
-      formData.append("file", file);
-      const params = new URLSearchParams({
-        start_phase: String(startPhaseProfiles),
-        end_phase: String(endPhaseProfiles),
+  const fetchProfilesData = async () => {
+    if (!file) {
+      console.warn("No file selected or loaded.");
+      return;
+    }
+    if (isInvalidRange(startPhaseProfiles, endPhaseProfiles)) {
+      console.warn("Fix Profiles start/end phase: start must be <= end.");
+      return;
+    }
+    try {
+      const result = await requestProfilesData(file, {
+        start: startPhaseProfiles,
+        end: endPhaseProfiles,
       });
-      try {
-        const response = await fetch(buildApiUrl("/export_profiles", params), {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) throw new Error("Failed to fetch profiles data");
-        const result = await response.json();
-        console.log("Profiles data:", result);
-        if (result._debug) console.info("server debug:", result._debug);
-        setProfilesData(result);
-      } catch (err) {
-        console.error("Error fetching profiles data:", err);
-        if (err instanceof TypeError && err.message.includes('fetch')) {
-          console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
-        }
+      setProfilesData(result);
+    } catch (err) {
+      console.error("Error fetching profiles data:", err);
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
-    };
+    }
+  };
   // Handle URL load (fetch file as Blob and store in state)
   const handleLoadFromUrl = async () => {
     if (!url || !username || !password) {
@@ -230,97 +180,28 @@ const App: React.FC = () => {
       return;
     }
     try {
-      // If the URL points to the MeerTime server, route through proxy
-      const meerTimeHost = "psrweb.jb.man.ac.uk";
-      let fetchUrl = url;
-      try {
-        const parsed = new URL(url);
-        if (parsed.host === meerTimeHost) {
-          // In dev: use Vite proxy at /api
-          // In prod: use FastAPI backend proxy
-          if (import.meta.env.DEV) {
-            fetchUrl = url.replace(/^https?:\/\/[^/]+/, "/api");
-          } else {
-            // Route through FastAPI backend
-            const apiBase = import.meta.env.VITE_API_BASE_URL || "";
-            fetchUrl = `${apiBase}/proxy?url=${encodeURIComponent(url)}`;
-          }
-        }
-      } catch (e) {
-        // leave fetchUrl as-is if URL parsing fails
-      }
-
-      const authHeader = { Authorization: "Basic " + btoa(username + ":" + password) };
-
-      // Try to derive on-pulse window from pipeline_info.json that lives alongside the plots
-      const plotsMarker = "/plots/";
-      let onPulseStart = 0.0;
-      let onPulseEnd = 1.0;
-      let onPulseMid = 0.5;
-      let pipelineJson: any = null;
-      const markerIndex = fetchUrl.indexOf(plotsMarker);
-      if (markerIndex !== -1) {
-        const pipelineInfoUrl = fetchUrl.slice(0, markerIndex + plotsMarker.length) + "pipeline_info.json";
-        try {
-          const pipelineRes = await fetch(pipelineInfoUrl, { headers: authHeader });
-          if (pipelineRes.ok) {
-            pipelineJson = await pipelineRes.json();
-            const candidate = pipelineJson?.windows?.on?.[0];
-            if (Array.isArray(candidate) && candidate.length >= 2) {
-              const candidateStart = Number(candidate[0]);
-              const candidateEnd = Number(candidate[1]);
-              if (Number.isFinite(candidateStart) && Number.isFinite(candidateEnd)) {
-                onPulseStart = candidateStart;
-                onPulseEnd = candidateEnd;
-                onPulseMid = (candidateStart + candidateEnd) / 2;
-              }
-            }
-          } else {
-            console.warn("pipeline_info.json not reachable; using default on-pulse window");
-          }
-        } catch (err) {
-          console.warn("Error fetching pipeline_info.json; using default on-pulse window", err);
-        }
-      }
-      
-      // Extract observation metadata
-      if (pipelineJson) {
-        const obsId = extractObsId(url, pipelineJson);
-        const freq = pipelineJson?.input_data?.header?.FREQ ?? pipelineJson?.header?.FREQ ?? "Unknown";
-        const utcStart = pipelineJson?.input_data?.header?.UTC_START ?? pipelineJson?.header?.UTC_START ?? "Unknown";
-        setObsMetadata({
-          obsId,
-          freq: typeof freq === "number" ? freq.toFixed(2) : String(freq),
-          utcStart: String(utcStart),
-        });
-      } else {
-        setObsMetadata(null);
-      }
-
-      const response = await fetch(fetchUrl, {
-        headers: authHeader,
-      });
-      if (!response.ok) throw new Error("Failed to fetch file");
-      const blob = await response.blob();
-      applyNewFile(blob);
-      setLeftPhaseHist(onPulseStart);
-      setMidPhaseHist(onPulseMid);
-      setRightPhaseHist(onPulseEnd);
-      setStartPhaseAitoff(onPulseStart);
-      setEndPhaseAitoff(onPulseEnd);
-      setAitoffPhase(onPulseMid);
-      setStartPhasePolHist(onPulseStart);
-      setEndPhasePolHist(onPulseEnd);
-      setStartPhasePolStacks(onPulseStart);
-      setEndPhasePolStacks(onPulseEnd);
-      setStartPhaseProfiles(onPulseStart);
-      setEndPhaseProfiles(onPulseEnd);
-      setStartPhaseHeatmaps(onPulseStart);
-      setEndPhaseHeatmaps(onPulseEnd);
-      setStartPhasePolarParams(onPulseStart);
-      setEndPhasePolarParams(onPulseEnd);
-      setOnPulseStartPolarParams(onPulseStart);
-      setOnPulseEndPolarParams(onPulseEnd);
+      const remoteFile = await loadRemoteNpz(url, username, password);
+      const { start, end, mid } = remoteFile.onPulse;
+      applyNewFile(remoteFile.blob);
+      setObsMetadata(remoteFile.metadata);
+      setLeftPhaseHist(start);
+      setMidPhaseHist(mid);
+      setRightPhaseHist(end);
+      setStartPhaseAitoff(start);
+      setEndPhaseAitoff(end);
+      setAitoffPhase(mid);
+      setStartPhasePolHist(start);
+      setEndPhasePolHist(end);
+      setStartPhasePolStacks(start);
+      setEndPhasePolStacks(end);
+      setStartPhaseProfiles(start);
+      setEndPhaseProfiles(end);
+      setStartPhaseHeatmaps(start);
+      setEndPhaseHeatmaps(end);
+      setStartPhasePolarParams(start);
+      setEndPhasePolarParams(end);
+      setOnPulseStartPolarParams(start);
+      setOnPulseEndPolarParams(end);
     } catch (err) {
       console.error("Error loading file:", err);
     }
@@ -333,27 +214,18 @@ const App: React.FC = () => {
       return;
     }
     if (isInvalidRange(startPhaseHeatmaps, endPhaseHeatmaps)) {
-      console.warn("Fix Heatmaps start/end phase: start must be ≤ end.");
+      console.warn("Fix Heatmaps start/end phase: start must be <= end.");
       return;
     }
-    const formData = new FormData();
-    formData.append("file", file);
-    const params = new URLSearchParams({
-      start_phase: String(startPhaseHeatmaps),
-      end_phase: String(endPhaseHeatmaps),
-    });
     try {
-      const response = await fetch(buildApiUrl("/export_heatmaps", params), {
-        method: "POST",
-        body: formData,
+      const result = await requestHeatmapsData(file, {
+        start: startPhaseHeatmaps,
+        end: endPhaseHeatmaps,
       });
-      if (!response.ok) throw new Error("Failed to fetch heatmaps data");
-      const result = await response.json();
-      console.log("Heatmaps data:", result);
-      if (result._debug) console.info("server debug:", result._debug);
+      setHeatmapsData(result);
     } catch (err) {
       console.error("Error fetching heatmaps data:", err);
-      if (err instanceof TypeError && err.message.includes('fetch')) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
         console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
     }
@@ -366,38 +238,15 @@ const App: React.FC = () => {
       return;
     }
     if (isInvalidRange(startPhasePolHist, endPhasePolHist)) {
-      console.warn("Fix polarisation histograms start/end: start must be ≤ end.");
+      console.warn("Fix polarisation histograms start/end: start must be <= end.");
       return;
     }
 
-    const quantities = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA", "I", "dPA"];
-    const results: Record<string, any> = {};
-
-    await Promise.all(quantities.map(async q => {
-      const formData = new FormData();
-      formData.append("file", file);
-      const params = new URLSearchParams({
-        start_phase: String(startPhasePolHist),
-        end_phase: String(endPhasePolHist),
-        on_pulse_start: String(startPhasePolHist),
-        on_pulse_end: String(endPhasePolHist),
-        quantity: q,
-      });
-      try {
-        const response = await fetch(buildApiUrl("/polarisation_histogram", params), {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) throw new Error(`Failed to fetch polarisation histogram for ${q}`);
-        const result = await response.json();
-        results[q] = result;
-      } catch (err) {
-        console.error(`Error fetching polarisation histogram ${q}:`, err);
-        results[q] = null;
-      }
-    }));
-
-    setPolHistogramData(results);
+    const results = await requestPolarisationHistograms(file, {
+      start: startPhasePolHist,
+      end: endPhasePolHist,
+    });
+    setPolHistogramData(results as Record<string, any>);
   };
 
   // Call /polarisation_stacks endpoint
@@ -407,67 +256,45 @@ const App: React.FC = () => {
       return;
     }
     if (isInvalidRange(startPhasePolStacks, endPhasePolStacks)) {
-      console.warn("Fix polarisation stacks start/end: start must be ≤ end.");
+      console.warn("Fix polarisation stacks start/end: start must be <= end.");
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-    const params = new URLSearchParams({
-      start_phase: String(startPhasePolStacks),
-      end_phase: String(endPhasePolStacks),
-      on_pulse_start: String(startPhasePolStacks),
-      on_pulse_end: String(endPhasePolStacks),
-    });
     try {
-      const response = await fetch(buildApiUrl("/polarisation_stacks", params), {
-        method: "POST",
-        body: formData,
+      const result = await requestPolarisationStacks(file, {
+        start: startPhasePolStacks,
+        end: endPhasePolStacks,
       });
-      if (!response.ok) throw new Error("Failed to fetch polarisation stacks");
-      const result = await response.json();
-      console.log("Polarisation stacks data:", result);
       setPolStacksData(result);
     } catch (err) {
       console.error("Error fetching polarisation stacks:", err);
-      if (err instanceof TypeError && err.message.includes('fetch')) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
         console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
     }
   };
 
-  // Call /polarisation_preprocess endpoint for derived parameters and Poincaré coords
+  // Call /polarisation_preprocess endpoint for derived parameters and Poincare coords
   const fetchPolarisationParams = async () => {
     if (!file) {
       console.warn("No file selected or loaded.");
       return;
     }
     if (isInvalidRange(startPhasePolarParams, endPhasePolarParams)) {
-      console.warn("Fix polarisation parameter start/end: start must be ≤ end.");
+      console.warn("Fix polarisation parameter start/end: start must be <= end.");
       return;
     }
     if (isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams)) {
-      console.warn("Fix on-pulse start/end: start must be ≤ end.");
+      console.warn("Fix on-pulse start/end: start must be <= end.");
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-    const params = new URLSearchParams({
-      start_phase: String(startPhasePolarParams),
-      end_phase: String(endPhasePolarParams),
-      on_pulse_start: String(onPulseStartPolarParams),
-      on_pulse_end: String(onPulseEndPolarParams),
-    });
-
     try {
-      const response = await fetch(buildApiUrl("/polarisation_preprocess", params), {
-        method: "POST",
-        body: formData,
-      });
-      if (!response.ok) throw new Error("Failed to fetch polarisation parameters");
-      const result = await response.json();
-      console.log("Polarisation parameters:", result);
+      const result = await requestPolarisationParams(
+        file,
+        { start: startPhasePolarParams, end: endPhasePolarParams },
+        { start: onPulseStartPolarParams, end: onPulseEndPolarParams },
+      );
       setPolarParamsData(result);
     } catch (err) {
       console.error("Error fetching polarisation parameters:", err);
@@ -489,30 +316,20 @@ const App: React.FC = () => {
     }
     const phasesOutOfOrder = leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist;
     if (phasesOutOfOrder) {
-      console.warn("Fix phase slice order: left ≤ mid ≤ right.");
+      console.warn("Fix phase slice order: left <= mid <= right.");
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-    const params = new URLSearchParams({
-      left_phase: String(leftPhaseHist),
-      mid_phase: String(midPhaseHist),
-      right_phase: String(rightPhaseHist),
-    });
-
     try {
-      const response = await fetch(buildApiUrl("/phase_slice_histograms", params), {
-        method: "POST",
-        body: formData,
+      const result = await requestPhaseSliceHistograms(file, {
+        left: leftPhaseHist,
+        mid: midPhaseHist,
+        right: rightPhaseHist,
       });
-      if (!response.ok) throw new Error("Failed to fetch phase-slice histograms");
-      const result = await response.json();
-      console.log("Phase-slice histogram data:", result);
       setPhaseHistogramData(result);
     } catch (err) {
       console.error("Error fetching phase-slice histograms:", err);
-      if (err instanceof TypeError && err.message.includes('fetch')) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
         console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
     }
@@ -562,7 +379,7 @@ const App: React.FC = () => {
     return () => clearTimeout(t);
   }, [startPhaseHeatmaps, endPhaseHeatmaps, file]);
 
-  // Re-fetch Poincaré Aitoff when its phase changes
+  // Re-fetch Poincare Aitoff when its phase changes
   useEffect(() => {
     if (!file) return;
     const t = setTimeout(() => fetchPoincareAitoffData(), 150);
@@ -590,29 +407,28 @@ const App: React.FC = () => {
     return () => clearTimeout(t);
   }, [file, startPhasePolStacks, endPhasePolStacks]);
 
-  useEffect(() => {
-    try {
-      const root = document.documentElement;
-      if (isDark) root.classList.add("dark");
-      else root.classList.remove("dark");
-      localStorage.setItem("theme", isDark ? "dark" : "light");
-      window.dispatchEvent(new CustomEvent("theme-toggle", { detail: { dark: isDark } }));
-    } catch (e) {
-      /* noop */
-    }
-  }, [isDark]);
-
   return (
     <div className="min-h-screen w-full flex flex-col">
-      <header className="max-w-7xl mx-auto w-full px-8 pt-8 pb-4 flex flex-col gap-3">
-        <div className="w-full flex items-center justify-between">
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold text-foreground">Pulsar-PReSPIDAR</h1>
+      <CatalogueModal 
+        isOpen={catalogueModalOpen} 
+        onClose={() => setCatalogueModalOpen(false)} 
+        onUrlSelected={(selectedUrl) => {
+          setUrl(selectedUrl);
+          setCatalogueModalOpen(false);
+        }}
+      />
+      <header className="max-w-7xl mx-auto w-full px-5 sm:px-8 pt-8 pb-4 flex flex-col gap-3">
+        <div className="w-full flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-3xl font-bold text-foreground leading-tight">Pulsar-PReSPIDAR</h1>
             <p className="text-sm mt-1 font-semibold text-muted-foreground">
               Pulsar-Polarisation REsolved Single Pulse Interactive Data AnalyseR
             </p>
           </div>
-          <div className="ml-4">
+          <div className="flex flex-wrap gap-2 md:ml-4">
+            <Button variant="outline" onClick={() => setCatalogueModalOpen(true)}>
+              Browse Catalogue
+            </Button>
             <Button variant="outline" onClick={() => setIsDark(d => !d)}>
               {isDark ? "Light Mode" : "Dark Mode"}
             </Button>
@@ -652,8 +468,8 @@ const App: React.FC = () => {
                   <li>Pulse stacks of polarization parameters.</li>
                   <li>2|EA| v/s P/I plot (Oswald et al., 2023) for partial coherence model checks.</li>
                   <li>2D histograms of polarization parameters with 1D histograms for specific phases.</li>
-                  <li>Trajectories of polarization state on the Poincaré sphere (Aitoff and 3D) for integrated and individual subpulses.</li>
-                  <li>Polarization states on the Poincaré sphere at a fixed phase for all pulses (inspect O/X mode clustering).</li>
+                  <li>Trajectories of polarization state on the Poincare sphere (Aitoff and 3D) for integrated and individual subpulses.</li>
+                  <li>Polarization states on the Poincare sphere at a fixed phase for all pulses (inspect O/X mode clustering).</li>
                   <li>Linear polarisation parameter is bias-corrected.</li>
                   <li>Radius of curvature (circle fitting) of the polarization trajectory vs pulse phase.</li>
                   <li>For uploaded numpy files, on-pulse window is inferred from noise floor as a fraction of peak integrated intensity (user input).</li>
@@ -672,7 +488,7 @@ const App: React.FC = () => {
           </CollapsibleContent>
         </Collapsible>
       </header>
-      <div className="max-w-7xl mx-auto w-full p-8 flex flex-col gap-8">
+      <div className="max-w-7xl mx-auto w-full p-5 sm:p-8 flex flex-col gap-8">
         {/* Upload: full width first */}
         <div>
           <Card className="card-surface border-0 shadow-xl">
@@ -703,7 +519,7 @@ const App: React.FC = () => {
                 <div className="text-center text-muted-foreground">or</div>
                 <Label className="text-muted-foreground">File URL</Label>
                 <Input type="text" placeholder="File URL" value={url} onChange={e => setUrl(e.target.value)} />
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <Label className="text-muted-foreground">Username</Label>
                     <Input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
@@ -730,11 +546,11 @@ const App: React.FC = () => {
               </CardHeader>
               <CardContent className="flex-1 flex flex-col">
                 <div className="space-y-14">
-                  {/* Polarisation parameters + Poincaré dual view */}
-                  <div>
-                    <div className="text-lg font-semibold">Polarisation parameters + Poincaré dual view + Custom plots</div>
+                  {/* Polarisation parameters + Poincare dual view */}
+                  <section className="scientific-section">
+                    <h2 className="section-title">Polarisation parameters, Poincare view, and custom plots</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -774,7 +590,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams) && (
-                      <div className="text-sm text-red-600 mt-1">Ensure start ≤ end for the on-pulse window.</div>
+                      <div className="text-sm text-red-600 mt-1">Ensure start &lt;= end for the on-pulse window.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
@@ -797,18 +613,20 @@ const App: React.FC = () => {
                                 absv_frac: integrated.absv_frac ?? [],
                               }}
                               isDark={isDark}
+                              startPhase={startPhaseAitoff}
+                              endPhase={endPhaseAitoff}
                             />
                           );
                         })() : null}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
 
                   {/* Profiles + Heatmaps (integrated) */}
-                  <div>
-                    <div className="text-lg font-semibold">Waterfall Profiles (with Heatmaps)</div>
+                  <section className="scientific-section">
+                    <h2 className="section-title">Waterfall profiles and integrated heatmaps</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -840,7 +658,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhaseProfiles, endPhaseProfiles) && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be ≤ end phase.</div>
+                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
@@ -855,13 +673,13 @@ const App: React.FC = () => {
                         )}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
 
                   {/* Polarisation stacks */}
-                  <div>
-                    <div className="text-lg font-semibold">Polarisation stacks (pulse vs phase)</div>
+                  <section className="scientific-section">
+                    <h2 className="section-title">Polarisation stacks</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -893,7 +711,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhasePolStacks, endPhasePolStacks) && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be ≤ end phase.</div>
+                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
@@ -902,13 +720,13 @@ const App: React.FC = () => {
                         )}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
 
                   {/* Polarisation histograms (2D) */}
-                  <div>
-                    <div className="text-lg font-semibold">Phase-resolved polarisation histograms (2D)</div>
+                  <section className="scientific-section">
+                    <h2 className="section-title">Phase-resolved polarisation histograms</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -940,13 +758,13 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhasePolHist, endPhasePolHist) && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be ≤ end phase.</div>
+                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
                         {polHistogramData && (
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            {["P/I", "L/I", "|V/I|", "V/I", "PA", "EA", "I", "dPA"].map(q => (
+                            {POLARISATION_QUANTITIES.map(q => (
                               <div key={q} className="border border-border/50 rounded-lg">
                                 <SinglePolarisationHistogram data={polHistogramData[q]} isDark={isDark} />
                               </div>
@@ -955,13 +773,13 @@ const App: React.FC = () => {
                         )}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
 
                   {/* Phase-slice histograms section */}
-                  <div>
-                    <div className="text-lg font-semibold">Phase-slice histograms</div>
+                  <section className="scientific-section">
+                    <h2 className="section-title">Phase-slice histograms</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -1002,7 +820,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {(leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist) && (
-                      <div className="text-sm text-red-600 mt-1">Ensure phase order: left ≤ mid ≤ right.</div>
+                      <div className="text-sm text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
@@ -1015,13 +833,13 @@ const App: React.FC = () => {
                         )}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
 
-                  {/* Poincaré Aitoff section */}
-                  <div>
-                    <div className="text-lg font-semibold">Poincaré Sphere (Aitoff, fixed phase)</div>
+                  {/* Poincare Aitoff section */}
+                  <section className="scientific-section">
+                    <h2 className="section-title">Fixed-phase Poincare sphere</h2>
                     {obsMetadata && (
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="section-metadata">
                         <div>Obs ID: {obsMetadata.obsId}</div>
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
@@ -1057,16 +875,16 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhaseAitoff, endPhaseAitoff) && (
-                      <div className="text-sm text-red-600 mt-1">On-pulse start must be ≤ end.</div>
+                      <div className="text-sm text-red-600 mt-1">On-pulse start must be &lt;= end.</div>
                     )}
                     <div className="mt-4 w-full">
                       <ErrorBoundary>
                         {poincareAitoffData && (
-                          <PoincareAitoffFixed data={poincareAitoffData} phaseValue={aitoffPhase} isDark={isDark} />
+                          <PoincareAitoffView data={poincareAitoffData} phaseValue={aitoffPhase} isDark={isDark} />
                         )}
                       </ErrorBoundary>
                     </div>
-                  </div>
+                  </section>
                 </div>
               </CardContent>
             </Card>

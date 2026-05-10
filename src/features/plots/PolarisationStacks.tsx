@@ -1,6 +1,8 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 export type PolarisationStackPayload = {
   obs_id?: string;
@@ -62,7 +64,7 @@ export default function PolarisationStacks({ data, isDark }: Props) {
       };
 
       const layout: any = {
-        title: { text: label, x: 0.5, y: 0.97, xanchor: "center" },
+        title: undefined,
         xaxis: {
           title: { text: "Phase", standoff: 8 },
           range: xRange,
@@ -93,7 +95,7 @@ export default function PolarisationStacks({ data, isDark }: Props) {
           mirror: "allticks",
           automargin: true,
         },
-        margin: { l: 70, r: 60, t: 60, b: 60 },
+        margin: { l: 70, r: 60, t: 25, b: 60 },
         height: 360,
         paper_bgcolor: paperBg,
         plot_bgcolor: plotBg,
@@ -101,19 +103,11 @@ export default function PolarisationStacks({ data, isDark }: Props) {
         template,
       };
 
-      return { trace, layout, key: `${q.name}-${themeKey}` };
+      return { trace, layout, key: `${q.name}-${themeKey}`, label };
     });
   }, [data, axisColor, gridColor, paperBg, plotBg, template, themeKey]);
 
   const fullscreenItem = fullscreenKey ? items.find(i => i.key === fullscreenKey) : null;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFullscreenKey(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -121,37 +115,34 @@ export default function PolarisationStacks({ data, isDark }: Props) {
         <div className="lg:col-span-2 text-sm text-yellow-500">{data.warning}</div>
       )}
       {items.map(item => (
-        <div key={item.key} className="relative border border-border/50 rounded-lg overflow-hidden">
-          <div className="absolute right-3 top-3 z-10 flex gap-2">
+        <div key={item.key} className="plot-export-scope plot-frame">
+          <div className="plot-frame-header justify-start">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
+            <PlotExportButtons filename={`polarisation-stack-${item.key}`} />
+            <div className="plot-frame-title">{item.label}</div>
           </div>
           <Plot
             data={[item.trace]}
             layout={item.layout}
-            config={{ responsive: true }}
-            style={{ width: "100%", height: "100%" }}
+            config={paperPlotConfig(`polarisation-stack-${item.key}`)}
+            useResizeHandler
+            style={{ width: "100%", height: "360px" }}
             key={`${item.key}-${data.start_phase}-${data.end_phase}`}
           />
         </div>
       ))}
 
       {fullscreenItem && (
-        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="w-[95vw] max-w-7xl h-[90vh]">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setFullscreenKey(null)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
-          <div className="h-full w-full p-3">
+        <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="w-[95vw] max-w-7xl h-[90vh]" title="Polarisation stack fullscreen">
+          <div className="plot-export-scope h-full w-full p-3 pt-10">
+            <div className="plot-toolbar mb-2">
+              <PlotExportButtons filename={`polarisation-stack-${fullscreenItem.key}-fullscreen`} />
+            </div>
             <Plot
               data={[fullscreenItem.trace]}
               layout={{ ...fullscreenItem.layout, height: undefined, autosize: true }}
-              config={{ responsive: true }}
+              config={paperPlotConfig(`polarisation-stack-${fullscreenItem.key}-fullscreen`)}
+              useResizeHandler
               style={{ width: "100%", height: "100%" }}
               key={`${fullscreenItem.key}-fullscreen-${data.start_phase}-${data.end_phase}`}
             />

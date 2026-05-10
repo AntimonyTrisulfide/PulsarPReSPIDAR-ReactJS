@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
-import { FullscreenOverlay, FullscreenIconButton } from "./components/FullscreenOverlay";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
 
 export type PolarisationHistogramPayload = {
   obs_id?: string;
@@ -66,7 +68,7 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
       yRange: [number, number];
     }> = [];
     const layoutAcc: any = {
-      title: data.obs_id ? `Polarisation histograms (${data.obs_id})` : "Polarisation histograms",
+      title: undefined,
       grid: { rows, columns: cols, pattern: "independent" },
       showlegend: false,
       height: Math.max(520, rows * 280),
@@ -174,36 +176,33 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
   }, [data, axisColor, gridColor, paperBg, plotBg, template]);
 
   return (
-    <div className="relative" style={{ width: "100%", height: `${layout.height}px`, padding: "1rem" }}>
-      <div className="absolute right-4 bottom-4 z-10">
+    <div className="plot-export-scope plot-frame" style={{ width: "100%" }}>
+      <div className="plot-frame-header justify-start">
         <FullscreenIconButton onClick={() => setIsFullscreen(true)} title="Open fullscreen" />
+        <PlotExportButtons filename="polarisation-histograms" />
+        <div className="plot-frame-title">Combined polarisation histograms</div>
       </div>
       {/* Summary removed per request; axis titles now reflect Phase (x) and quantity (y). */}
       <Plot
         data={traces}
         layout={layout}
-        config={{ responsive: true, displayModeBar: false }}
-        style={{ width: "100%", height: "100%" }}
+        config={paperPlotConfig("polarisation-histograms")}
+        useResizeHandler
+        style={{ width: "100%", height: `${layout.height}px` }}
         key={`${themeKey}-${layout.height}`}
       />
 
       {isFullscreen && (
-        <FullscreenOverlay onClose={() => setIsFullscreen(false)} contentClassName="p-4">
-          <div className="absolute right-3 top-3 z-20">
-            <button
-              type="button"
-              aria-label="Close fullscreen"
-              onClick={() => setIsFullscreen(false)}
-              className="h-8 w-8 rounded-md bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-1 focus:ring-offset-black/40"
-            >
-              ×
-            </button>
-          </div>
-          <div className="h-full w-full">
+        <FullscreenOverlay onClose={() => setIsFullscreen(false)} contentClassName="p-4" title="Polarisation histograms fullscreen">
+          <div className="plot-export-scope h-full w-full pt-8">
+            <div className="plot-toolbar mb-2">
+              <PlotExportButtons filename="polarisation-histograms-fullscreen" />
+            </div>
             <Plot
               data={traces}
               layout={{ ...layout, autosize: true, height: undefined }}
-              config={{ responsive: true, displayModeBar: false }}
+              config={paperPlotConfig("polarisation-histograms-fullscreen")}
+              useResizeHandler
               style={{ width: "100%", height: "100%" }}
               key={`${themeKey}-${layout.height}-fs`}
             />
