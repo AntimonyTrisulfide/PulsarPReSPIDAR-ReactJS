@@ -1,8 +1,10 @@
-import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, type CSSProperties } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, useId, type CSSProperties } from "react";
 import Plot from "react-plotly.js";
+import { geoGraticule, geoPath, scaleLinear, select } from "d3";
+import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { paperPlotConfig, safePlotFilename, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
 
 // Memoized Plot component to prevent unnecessary re-renders
 const MemoizedPlot = memo(Plot);
@@ -141,6 +143,177 @@ const CustomXYPlot = memo(function CustomXYPlot({
   );
 });
 
+type DualAitoffProjectionProps = {
+  points: DualAitoffPoint[];
+  startPhase: number;
+  endPhase: number;
+  axisColor: string;
+  gridColor: string;
+  mutedColor: string;
+  bgColor: string;
+  className?: string;
+  fullscreen?: boolean;
+};
+
+const aitoffLatLabelValues = [-60, -30, 0, 30, 60];
+const aitoffLonLabelValues = [-135, -90, -45, 0, 45, 90, 135];
+const DUAL_AITOFF_PNG_EXPORT_SCALE = 4;
+
+const DualAitoffProjection = memo(function DualAitoffProjection({
+  points,
+  startPhase,
+  endPhase,
+  axisColor,
+  gridColor,
+  mutedColor,
+  bgColor,
+  className,
+  fullscreen = false,
+}: DualAitoffProjectionProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const gradientId = `dual-aitoff-phase-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
+  const phaseScale = useMemo(() => {
+    const span = endPhase - startPhase;
+    const min = span === 0 ? startPhase - 0.5 : startPhase;
+    const max = span === 0 ? endPhase + 0.5 : endPhase;
+    return scaleLinear<string>()
+      .domain([min, min + (max - min) / 6, min + (2 * (max - min)) / 6, min + (3 * (max - min)) / 6, min + (4 * (max - min)) / 6, min + (5 * (max - min)) / 6, max])
+      .range(["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff", "#ff0000"]);
+  }, [endPhase, startPhase]);
+
+  useEffect(() => {
+    const target = containerRef.current;
+    if (!target) return;
+
+    const width = fullscreen ? 1320 : 1080;
+    const height = fullscreen ? 760 : 560;
+    const margin = { top: 28, right: 90, bottom: 78, left: 90 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+
+    select(target).selectAll("svg").remove();
+
+    const svg = select(target)
+      .append("svg")
+      .attr("width", "100%")
+      .attr("height", "100%")
+      .attr("viewBox", `0 0 ${width} ${height}`)
+      .attr("preserveAspectRatio", "xMidYMid meet")
+      .style("background-color", bgColor);
+
+    svg.append("rect").attr("width", width).attr("height", height).attr("fill", bgColor);
+
+    const projection = geoAitoff().fitExtent(
+      [[0, 0], [innerWidth, innerHeight]],
+      { type: "Sphere" },
+    );
+    const path = geoPath(projection);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+    g.append("path")
+      .datum({ type: "Sphere" })
+      .attr("d", path)
+      .attr("fill", bgColor)
+      .attr("stroke", axisColor)
+      .attr("stroke-width", 1.2);
+
+    g.append("path")
+      .datum(geoGraticule().step([45, 30])())
+      .attr("d", path)
+      .attr("fill", "none")
+      .attr("stroke", gridColor)
+      .attr("stroke-width", 0.8)
+      .attr("stroke-opacity", 0.78);
+
+    [makeAitoffLineString(0, "lon"), makeAitoffLineString(0, "lat")].forEach(line => {
+      g.append("path")
+        .datum(line)
+        .attr("d", path)
+        .attr("fill", "none")
+        .attr("stroke", mutedColor)
+        .attr("stroke-width", 1)
+        .attr("stroke-opacity", 0.82);
+    });
+
+    const circles = g.selectAll(".dual-aitoff-point")
+      .data(points)
+      .enter()
+      .append("circle")
+      .attr("class", "dual-aitoff-point")
+      .attr("cx", (point: DualAitoffPoint) => projection([point.lon, point.lat])?.[0] ?? 0)
+      .attr("cy", (point: DualAitoffPoint) => projection([point.lon, point.lat])?.[1] ?? 0)
+      .attr("r", fullscreen ? 3.8 : 3)
+      .attr("fill", (point: DualAitoffPoint) => phaseScale(point.phase))
+      .attr("opacity", 0.9)
+      .attr("stroke", bgColor)
+      .attr("stroke-width", 0.45);
+
+    circles.append("title")
+      .text((point: DualAitoffPoint) => `Lon: ${point.lon.toFixed(2)} deg\nLat: ${point.lat.toFixed(2)} deg\nPhase: ${point.phase.toFixed(4)}`);
+
+    if (!points.length) {
+      g.append("text")
+        .attr("x", innerWidth / 2)
+        .attr("y", innerHeight / 2)
+        .attr("text-anchor", "middle")
+        .attr("font-size", 14)
+        .attr("fill", mutedColor)
+        .text("No finite Poincare coordinates");
+    }
+
+    g.selectAll(".dual-aitoff-lat-label")
+      .data(aitoffLatLabelValues)
+      .enter()
+      .append("text")
+      .attr("class", "dual-aitoff-lat-label")
+      .attr("x", (lat: number) => (projection([-178, lat])?.[0] ?? 0) - 10)
+      .attr("y", (lat: number) => projection([-178, lat])?.[1] ?? 0)
+      .attr("text-anchor", "end")
+      .attr("dominant-baseline", "middle")
+      .attr("font-size", 11)
+      .attr("fill", mutedColor)
+      .attr("paint-order", "stroke")
+      .attr("stroke", bgColor)
+      .attr("stroke-width", 4)
+      .text((lat: number) => `${lat} deg`);
+
+    g.selectAll(".dual-aitoff-lon-tick")
+      .data(aitoffLonLabelValues)
+      .enter()
+      .append("line")
+      .attr("class", "dual-aitoff-lon-tick")
+      .attr("x1", (lon: number) => projection([lon, 0])?.[0] ?? 0)
+      .attr("y1", (lon: number) => (projection([lon, 0])?.[1] ?? 0) - 5)
+      .attr("x2", (lon: number) => projection([lon, 0])?.[0] ?? 0)
+      .attr("y2", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 5)
+      .attr("stroke", mutedColor)
+      .attr("stroke-width", 0.9)
+      .attr("stroke-linecap", "round")
+      .attr("opacity", 0.86);
+
+    g.selectAll(".dual-aitoff-lon-label")
+      .data(aitoffLonLabelValues)
+      .enter()
+      .append("text")
+      .attr("class", "dual-aitoff-lon-label")
+      .attr("x", (lon: number) => projection([lon, 0])?.[0] ?? 0)
+      .attr("y", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 17)
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "hanging")
+      .attr("font-size", 11)
+      .attr("fill", mutedColor)
+      .attr("paint-order", "stroke")
+      .attr("stroke", bgColor)
+      .attr("stroke-width", 4)
+      .text((lon: number) => `${lon} deg`);
+
+    drawDualAitoffColorbar(svg, width, height, gradientId, startPhase, endPhase, phaseScale, axisColor, mutedColor);
+  }, [axisColor, bgColor, endPhase, fullscreen, gradientId, gridColor, mutedColor, phaseScale, points, startPhase]);
+
+  return <div ref={containerRef} className={className} />;
+});
+
 interface PolarisationDataset {
   PA: number[];
   EA: number[];
@@ -152,6 +325,12 @@ interface PolarisationDataset {
   v_frac: number[];
   absv_frac: number[];
 }
+
+type DualAitoffPoint = {
+  lon: number;
+  lat: number;
+  phase: number;
+};
 
 interface PolarisationDualViewProps {
   phaseAxis: number[];
@@ -174,6 +353,8 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   const draggingRef = useRef(false);
   const splitRef = useRef(50);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const leftAitoffScopeRef = useRef<HTMLDivElement>(null);
+  const fullscreenAitoffScopeRef = useRef<HTMLDivElement>(null);
   const dragStartX = useRef<number | null>(null);
   const draggedRef = useRef(false);
 
@@ -193,92 +374,22 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     return Array.from({ length: n }, (_, i) => startPhase + (i / (n - 1)) * phaseRange);
   }, [data.x?.length, startPhase, endPhase]);
 
-  const lonLat = useMemo(() => {
+  const aitoffPoints = useMemo<DualAitoffPoint[]>(() => {
     if (!data.PA?.length || !data.EA?.length) {
-      return { lon: [], lat: [], lonDeg: [], latDeg: [] };
+      return [];
     }
-    const lon = data.PA.map(v => (2 * v * Math.PI) / 180);
-    const lat = data.EA.map(v => (2 * v * Math.PI) / 180);
-    return { lon, lat, lonDeg: lon.map(v => (v * 180) / Math.PI), latDeg: lat.map(v => (v * 180) / Math.PI) };
-  }, [data.PA, data.EA]);
-
-  const aitoffTrace = useMemo(() => ({
-    type: "scattergeo" as const,
-    lon: lonLat.lonDeg,
-    lat: lonLat.latDeg,
-    mode: "markers" as const,
-    marker: {
-      size: 4,
-      color: markerColors,
-      colorscale: [
-        [0, "#ff0000"],
-        [1 / 6, "#ffff00"],
-        [2 / 6, "#00ff00"],
-        [3 / 6, "#00ffff"],
-        [4 / 6, "#0000ff"],
-        [5 / 6, "#ff00ff"],
-        [1, "#ff0000"],
-      ],
-      cmin: startPhase,
-      cmax: endPhase,
-      opacity: 0.9,
-      showscale: true,
-      colorbar: {
-        title: { text: "Phase" },
-        orientation: "h" as const,
-        y: -0.25,
-        x: 0.5,
-        xanchor: "center" as const,
-        len: 0.6,
-        tickvals: [startPhase, endPhase],
-        ticktext: [startPhase.toFixed(2), endPhase.toFixed(2)],
-      },
-    },
-    hovertemplate: "Lon: %{lon:.2f} deg<br>Lat: %{lat:.2f} deg<extra></extra>",
-    name: "Poincare points",
-  }), [lonLat.latDeg, lonLat.lonDeg, startPhase, endPhase]);
-
-  const aitoffLayout = useMemo(() => ({
-    title: undefined,
-    dragmode: false,
-    geo: {
-      projection: { type: "aitoff" },
-      showframe: true,
-      framecolor: axisColor,
-      framewidth: 1,
-      showcountries: false,
-      showcoastlines: false,
-      showland: false,
-      showocean: false,
-      lataxis: {
-        showgrid: true,
-        dtick: 30,
-        range: [-90, 90],
-        tickmode: "linear",
-        showticklabels: true,
-        ticklen: 4,
-        tickcolor: gridColor,
-        gridcolor: gridColor,
-        tickfont: { color: axisColor, size: 10 },
-      },
-      lonaxis: {
-        showgrid: true,
-        dtick: 45,
-        range: [-180, 180],
-        tickmode: "linear",
-        showticklabels: true,
-        ticklen: 4,
-        tickcolor: gridColor,
-        gridcolor: gridColor,
-        tickfont: { color: axisColor, size: 10 },
-      },
-      bgcolor: plotBg,
-    },
-    margin: { l: 8, r: 8, t: 50, b: 42 },
-    paper_bgcolor: paperBg,
-    plot_bgcolor: plotBg,
-    font: { color: axisColor },
-  }), [axisColor, gridColor, paperBg, plotBg]);
+    const count = Math.min(data.PA.length, data.EA.length, markerColors.length);
+    const next: DualAitoffPoint[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const lon = normalizeLongitude(2 * data.PA[index]);
+      const lat = clamp(2 * data.EA[index], -90, 90);
+      const phase = markerColors[index];
+      if (Number.isFinite(lon) && Number.isFinite(lat) && Number.isFinite(phase)) {
+        next.push({ lon, lat, phase });
+      }
+    }
+    return next;
+  }, [data.PA, data.EA, markerColors]);
 
   const sphere3d = useMemo(() => getUnitSphereSurface(20), []);
 
@@ -322,7 +433,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     },
     hovertemplate: "x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
     name: "Poincare points",
-  }), [data.x, data.y, data.z, lonLat.latDeg, startPhase, endPhase, markerColors]);
+  }), [data.x, data.y, data.z, startPhase, endPhase, markerColors]);
 
   const layout3d = useMemo(() => ({
     title: undefined,
@@ -510,6 +621,11 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     });
   }, []);
 
+  const exportDualAitoff = useCallback((format: PlotExportFormat, source: "inline" | "fullscreen" = "inline") => {
+    const scope = source === "fullscreen" ? fullscreenAitoffScopeRef.current : leftAitoffScopeRef.current;
+    downloadSvgFromScope(scope, `poincare-dual-aitoff${source === "fullscreen" ? "-fullscreen" : ""}`, format);
+  }, []);
+
   const dispatchResize = useCallback((force = false) => {
     const now = performance.now();
     if (!force && now - lastResizeTs.current < 48) return;
@@ -583,11 +699,14 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   }, [applySplit, dispatchResize, stopDrag]);
 
   const leftPlot = (
-    <div className="plot-export-scope h-[580px] w-full">
+    <div ref={leftAitoffScopeRef} className="plot-export-scope h-[580px] w-full">
       <div className="flex justify-between items-center mb-2">
         <div className="plot-toolbar">
           <FullscreenIconButton onClick={() => setFullscreen("left")} title="Fullscreen left" />
-          <PlotExportButtons filename="poincare-dual-view" />
+          <PlotExportButtons
+            filename="poincare-dual-view"
+            onExport={mode === "aitoff" ? format => exportDualAitoff(format) : undefined}
+          />
           <div className="text-sm font-semibold text-muted-foreground">Poincare View</div>
         </div>
         <div className="flex items-center gap-2">
@@ -609,14 +728,27 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           </div>
         </div>
       </div>
-      <MemoizedPlot
-        key={`poincare-${mode}`}
-        data={mode === "aitoff" ? [aitoffTrace] : [sphere3d, points3d]}
-        layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d), dragmode: mode === "3d" ? "orbit" : false }}
-        config={paperPlotConfig("poincare-dual-view")}
-        useResizeHandler
-        style={{ width: "100%", height: "100%" }}
-      />
+      {mode === "aitoff" ? (
+        <DualAitoffProjection
+          points={aitoffPoints}
+          startPhase={startPhase}
+          endPhase={endPhase}
+          axisColor={axisColor}
+          gridColor={gridColor}
+          mutedColor={themeIsDark ? "#9aa8bd" : "#64748b"}
+          bgColor={plotBg}
+          className="h-[calc(100%-2.5rem)] min-h-[520px] w-full"
+        />
+      ) : (
+        <MemoizedPlot
+          key="poincare-3d"
+          data={[sphere3d, points3d]}
+          layout={{ ...layout3d, dragmode: "orbit" }}
+          config={paperPlotConfig("poincare-dual-view")}
+          useResizeHandler
+          style={{ width: "100%", height: "100%" }}
+        />
+      )}
     </div>
   );
 
@@ -718,17 +850,34 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
         <FullscreenOverlay onClose={() => setFullscreen(null)} contentClassName="w-[96vw] max-w-7xl h-[92vh] p-4" title="Polarisation fullscreen">
           <div className="h-full w-full">
             {fullscreen === "left" ? (
-              <div className="plot-export-scope h-full w-full pt-8">
+              <div ref={fullscreenAitoffScopeRef} className="plot-export-scope h-full w-full pt-8">
                 <div className="plot-toolbar mb-2">
-                  <PlotExportButtons filename="poincare-dual-view-fullscreen" />
+                  <PlotExportButtons
+                    filename="poincare-dual-view-fullscreen"
+                    onExport={mode === "aitoff" ? format => exportDualAitoff(format, "fullscreen") : undefined}
+                  />
                 </div>
-                <MemoizedPlot
-                  data={mode === "aitoff" ? [aitoffTrace] : [sphere3d, points3d]}
-                  layout={{ ...(mode === "aitoff" ? aitoffLayout : layout3d), autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 }, dragmode: mode === "3d" ? "orbit" : false }}
-                  config={paperPlotConfig("poincare-dual-view-fullscreen")}
-                  useResizeHandler
-                  style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
-                />
+                {mode === "aitoff" ? (
+                  <DualAitoffProjection
+                    points={aitoffPoints}
+                    startPhase={startPhase}
+                    endPhase={endPhase}
+                    axisColor={axisColor}
+                    gridColor={gridColor}
+                    mutedColor={themeIsDark ? "#9aa8bd" : "#64748b"}
+                    bgColor={plotBg}
+                    fullscreen
+                    className="h-[calc(100%-2.5rem)] w-full"
+                  />
+                ) : (
+                  <MemoizedPlot
+                    data={[sphere3d, points3d]}
+                    layout={{ ...layout3d, autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 }, dragmode: "orbit" }}
+                    config={paperPlotConfig("poincare-dual-view-fullscreen")}
+                    useResizeHandler
+                    style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
+                  />
+                )}
               </div>
             ) : fullscreen === "right" ? (
               <div className="plot-export-scope h-full w-full pt-8">
@@ -820,4 +969,133 @@ function getUnitSphereSurface(steps: number): SphereSurface {
   };
   sphereCache.set(steps, result);
   return result;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeLongitude(value: number) {
+  return ((((value + 180) % 360) + 360) % 360) - 180;
+}
+
+function makeAitoffLineString(value: number, axis: "lat" | "lon") {
+  const coordinates: [number, number][] = [];
+  for (let step = -90; step <= 90; step += 2) {
+    coordinates.push(axis === "lon" ? [value, step] : [step * 2, value]);
+  }
+  return { type: "LineString", coordinates };
+}
+
+function drawDualAitoffColorbar(
+  svg: any,
+  width: number,
+  height: number,
+  gradientId: string,
+  startPhase: number,
+  endPhase: number,
+  colorScale: (value: number) => string,
+  axisColor: string,
+  mutedColor: string,
+) {
+  const colorbarWidth = 280;
+  const colorbarHeight = 10;
+  const colorbarX = width / 2 - colorbarWidth / 2;
+  const colorbarY = height - 38;
+  const min = startPhase === endPhase ? startPhase - 0.5 : startPhase;
+  const max = startPhase === endPhase ? endPhase + 0.5 : endPhase;
+  const defs = svg.append("defs");
+  const gradient = defs.append("linearGradient").attr("id", gradientId).attr("x1", "0%").attr("x2", "100%");
+
+  for (let index = 0; index <= 48; index += 1) {
+    const value = min + ((max - min) * index) / 48;
+    gradient.append("stop").attr("offset", `${(index / 48) * 100}%`).attr("stop-color", colorScale(value));
+  }
+
+  svg.append("rect")
+    .attr("x", colorbarX)
+    .attr("y", colorbarY)
+    .attr("width", colorbarWidth)
+    .attr("height", colorbarHeight)
+    .attr("fill", `url(#${gradientId})`)
+    .attr("stroke", axisColor)
+    .attr("stroke-width", 0.4);
+
+  svg.append("text")
+    .attr("x", colorbarX)
+    .attr("y", colorbarY + 26)
+    .attr("text-anchor", "start")
+    .attr("font-size", 11)
+    .attr("fill", mutedColor)
+    .text(startPhase.toFixed(3));
+
+  svg.append("text")
+    .attr("x", colorbarX + colorbarWidth / 2)
+    .attr("y", colorbarY - 8)
+    .attr("text-anchor", "middle")
+    .attr("font-size", 11)
+    .attr("fill", mutedColor)
+    .text("Phase");
+
+  svg.append("text")
+    .attr("x", colorbarX + colorbarWidth)
+    .attr("y", colorbarY + 26)
+    .attr("text-anchor", "end")
+    .attr("font-size", 11)
+    .attr("fill", mutedColor)
+    .text(endPhase.toFixed(3));
+}
+
+function downloadSvgFromScope(scope: HTMLElement | null, filename: string, format: PlotExportFormat) {
+  const svg = scope?.querySelector("svg");
+  if (!svg) return;
+
+  const clonedSvg = svg.cloneNode(true) as SVGSVGElement;
+  clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const viewBox = clonedSvg.getAttribute("viewBox")?.split(/\s+/).map(Number) ?? [0, 0, 1600, 1000];
+  const [, , width, height] = viewBox;
+  clonedSvg.setAttribute("width", String(width));
+  clonedSvg.setAttribute("height", String(height));
+  const serialized = new XMLSerializer().serializeToString(clonedSvg);
+  const safeName = safePlotFilename(filename);
+
+  if (format === "svg") {
+    downloadBlob(new Blob([serialized], { type: "image/svg+xml;charset=utf-8" }), `${safeName}.svg`);
+    return;
+  }
+
+  const image = new Image();
+  const svgBlob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
+  const svgUrl = URL.createObjectURL(svgBlob);
+
+  image.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(width * DUAL_AITOFF_PNG_EXPORT_SCALE);
+    canvas.height = Math.round(height * DUAL_AITOFF_PNG_EXPORT_SCALE);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      URL.revokeObjectURL(svgUrl);
+      return;
+    }
+    ctx.imageSmoothingEnabled = true;
+    ctx.scale(DUAL_AITOFF_PNG_EXPORT_SCALE, DUAL_AITOFF_PNG_EXPORT_SCALE);
+    ctx.drawImage(image, 0, 0);
+    canvas.toBlob(blob => {
+      if (blob) downloadBlob(blob, `${safeName}.png`);
+      URL.revokeObjectURL(svgUrl);
+    }, "image/png");
+  };
+  image.onerror = () => URL.revokeObjectURL(svgUrl);
+  image.src = svgUrl;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

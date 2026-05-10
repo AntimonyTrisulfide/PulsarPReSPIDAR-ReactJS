@@ -594,6 +594,9 @@ const App: React.FC = () => {
   const aitoffState = getCombinedPlotState("aitoff");
   const runningPlotCount = Object.values(plotRequestStates).filter(state => state.status === "running").length;
   const queuedPlotCount = Object.values(plotRequestStates).filter(state => state.status === "queued").length;
+  const stacksRangeInvalid = isInvalidRange(startPhasePolStacks, endPhasePolStacks);
+  const histogramsRangeInvalid = isInvalidRange(startPhasePolHist, endPhasePolHist);
+  const phaseSlicesRangeInvalid = leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist;
 
   return (
     <div className="min-h-screen w-full flex flex-col">
@@ -905,8 +908,11 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={startPhasePolStacks}
-                          onChange={e => setStartPhasePolStacks(Number(e.target.value))}
-                          className={isInvalidRange(startPhasePolStacks, endPhasePolStacks) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          onChange={e => {
+                            setStartPhasePolStacks(Number(e.target.value));
+                            setPolStacksData(null);
+                          }}
+                          className={stacksRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                       <div>
@@ -917,12 +923,15 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={endPhasePolStacks}
-                          onChange={e => setEndPhasePolStacks(Number(e.target.value))}
-                          className={isInvalidRange(startPhasePolStacks, endPhasePolStacks) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          onChange={e => {
+                            setEndPhasePolStacks(Number(e.target.value));
+                            setPolStacksData(null);
+                          }}
+                          className={stacksRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                     </div>
-                    {isInvalidRange(startPhasePolStacks, endPhasePolStacks) && (
+                    {stacksRangeInvalid && (
                       <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
@@ -957,8 +966,11 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={startPhasePolHist}
-                          onChange={e => setStartPhasePolHist(Number(e.target.value))}
-                          className={isInvalidRange(startPhasePolHist, endPhasePolHist) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          onChange={e => {
+                            setStartPhasePolHist(Number(e.target.value));
+                            setPolHistogramData(null);
+                          }}
+                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                       <div>
@@ -969,12 +981,15 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={endPhasePolHist}
-                          onChange={e => setEndPhasePolHist(Number(e.target.value))}
-                          className={isInvalidRange(startPhasePolHist, endPhasePolHist) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          onChange={e => {
+                            setEndPhasePolHist(Number(e.target.value));
+                            setPolHistogramData(null);
+                          }}
+                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                     </div>
-                    {isInvalidRange(startPhasePolHist, endPhasePolHist) && (
+                    {histogramsRangeInvalid && (
                       <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
@@ -1015,7 +1030,11 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={leftPhaseHist}
-                          onChange={e => setLeftPhaseHist(Number(e.target.value))}
+                          onChange={e => {
+                            setLeftPhaseHist(Number(e.target.value));
+                            setPhaseHistogramData(null);
+                          }}
+                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                       <div>
@@ -1026,7 +1045,11 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={midPhaseHist}
-                          onChange={e => setMidPhaseHist(Number(e.target.value))}
+                          onChange={e => {
+                            setMidPhaseHist(Number(e.target.value));
+                            setPhaseHistogramData(null);
+                          }}
+                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                       <div>
@@ -1037,11 +1060,15 @@ const App: React.FC = () => {
                           max={1}
                           step={0.001}
                           value={rightPhaseHist}
-                          onChange={e => setRightPhaseHist(Number(e.target.value))}
+                          onChange={e => {
+                            setRightPhaseHist(Number(e.target.value));
+                            setPhaseHistogramData(null);
+                          }}
+                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                     </div>
-                    {(leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist) && (
+                    {phaseSlicesRangeInvalid && (
                       <div className="text-sm text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
                     )}
                     <div className="mt-4 w-full">
