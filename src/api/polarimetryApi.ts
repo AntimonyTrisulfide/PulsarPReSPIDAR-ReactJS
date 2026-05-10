@@ -14,6 +14,8 @@ export const POLARIMETRY_ENDPOINTS = {
 } as const;
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const CONFIGURED_MEERTIME_PROXY_URL = import.meta.env.VITE_MEERTIME_PROXY_URL?.trim();
+const MEERTIME_PROXY_URL = (CONFIGURED_MEERTIME_PROXY_URL || "/api/meertime-proxy").replace(/\/$/, "");
 const MEERTIME_HOST = "psrweb.jb.man.ac.uk";
 const PLOTS_MARKER = "/plots/";
 
@@ -170,7 +172,7 @@ function resolveRemoteFetchUrl(url: string) {
       return url.replace(/^https?:\/\/[^/]+/, "/api");
     }
 
-    return `${API_BASE_URL}/proxy?url=${encodeURIComponent(url)}`;
+    return `${MEERTIME_PROXY_URL}?${new URLSearchParams({ url }).toString()}`;
   } catch {
     return url;
   }
@@ -214,10 +216,10 @@ export async function loadRemoteNpz(url: string, username: string, password: str
   const onPulse = { start: 0, end: 1, mid: 0.5 };
   let pipelineJson: Record<string, any> | null = null;
 
-  const pipelineInfoUrl = getPipelineInfoUrl(fetchUrl);
+  const pipelineInfoUrl = getPipelineInfoUrl(url);
   if (pipelineInfoUrl) {
     try {
-      const pipelineRes = await fetch(pipelineInfoUrl, { headers: authHeader });
+      const pipelineRes = await fetch(resolveRemoteFetchUrl(pipelineInfoUrl), { headers: authHeader });
       if (pipelineRes.ok) {
         pipelineJson = await pipelineRes.json();
         const candidate = pipelineJson?.windows?.on?.[0];
@@ -238,7 +240,7 @@ export async function loadRemoteNpz(url: string, username: string, password: str
 
   const response = await fetch(fetchUrl, { headers: authHeader });
   if (!response.ok) {
-    throw new Error(`Failed to fetch file (${response.status})`);
+    throw new Error(`Failed to fetch file (${response.status}) via ${fetchUrl}`);
   }
 
   return {
