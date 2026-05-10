@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/backend/:path*",
+      "destination": "https://pulsarprespidar-fastapi-phar.onrender.com/:path*"
+    }
+  ]
+}

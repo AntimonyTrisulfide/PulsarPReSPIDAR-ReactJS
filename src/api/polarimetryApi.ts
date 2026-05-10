@@ -13,7 +13,15 @@ export const POLARIMETRY_ENDPOINTS = {
   phaseSliceHistograms: "/phase_slice_histograms",
 } as const;
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const CONFIGURED_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim();
+const NORMALIZED_CONFIGURED_API_BASE_URL = CONFIGURED_API_BASE_URL?.replace(/\/$/, "");
+const RENDER_API_BASE_URL = "https://pulsarprespidar-fastapi-phar.onrender.com";
+const DEFAULT_API_BASE_URL = import.meta.env.PROD ? "/backend" : "http://localhost:8000";
+const API_BASE_URL = (
+  import.meta.env.PROD && NORMALIZED_CONFIGURED_API_BASE_URL === RENDER_API_BASE_URL
+    ? "/backend"
+    : NORMALIZED_CONFIGURED_API_BASE_URL || DEFAULT_API_BASE_URL
+).replace(/\/$/, "");
 const CONFIGURED_MEERTIME_PROXY_URL = import.meta.env.VITE_MEERTIME_PROXY_URL?.trim();
 const MEERTIME_PROXY_URL = (CONFIGURED_MEERTIME_PROXY_URL || "/api/meertime-proxy").replace(/\/$/, "");
 const MEERTIME_HOST = "psrweb.jb.man.ac.uk";
@@ -47,14 +55,15 @@ function buildApiUrl(path: string, params?: URLSearchParams) {
 async function postFileJson<T>(path: string, file: File | Blob, params: URLSearchParams): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
+  const requestUrl = buildApiUrl(path, params);
 
-  const response = await fetch(buildApiUrl(path, params), {
+  const response = await fetch(requestUrl, {
     method: "POST",
     body: formData,
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${path} (${response.status})`);
+    throw new Error(`Request failed: ${path} (${response.status}) via ${requestUrl}`);
   }
 
   return response.json() as Promise<T>;
@@ -110,17 +119,21 @@ export async function fetchPolarisationHistogram(file: File | Blob, quantity: st
 
 export async function fetchPolarisationHistograms(file: File | Blob, phaseRange: PhaseRange) {
   const results: Record<string, unknown> = {};
+  let successCount = 0;
 
-  await Promise.all(
-    POLARISATION_QUANTITIES.map(async quantity => {
-      try {
-        results[quantity] = await fetchPolarisationHistogram(file, quantity, phaseRange);
-      } catch (error) {
-        console.error(`Error fetching polarisation histogram ${quantity}:`, error);
-        results[quantity] = null;
-      }
-    }),
-  );
+  for (const quantity of POLARISATION_QUANTITIES) {
+    try {
+      results[quantity] = await fetchPolarisationHistogram(file, quantity, phaseRange);
+      successCount += 1;
+    } catch (error) {
+      console.error(`Error fetching polarisation histogram ${quantity}:`, error);
+      results[quantity] = null;
+    }
+  }
+
+  if (successCount === 0) {
+    throw new Error("All polarisation histogram requests failed.");
+  }
 
   return results;
 }

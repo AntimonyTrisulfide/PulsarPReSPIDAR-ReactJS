@@ -153,6 +153,14 @@
     margin-bottom: 0.85rem;
   }
 
+  .section-heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
   .section-eyebrow {
     color: hsl(var(--muted-foreground));
     font-size: 0.72rem;
@@ -166,6 +174,7 @@
     font-size: 1.02rem;
     font-weight: 700;
     line-height: 1.25;
+    min-width: 0;
   }
 
   .section-metadata {
@@ -249,6 +258,125 @@
     margin-top: 0.2rem;
   }
 
+  .plot-queue-summary,
+  .plot-status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    color: hsl(var(--muted-foreground));
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    min-height: 1.7rem;
+    padding: 0 0.65rem;
+    white-space: nowrap;
+  }
+
+  .plot-queue-summary-busy,
+  .plot-status-badge-busy {
+    border-color: hsl(var(--primary) / 0.35);
+    background: hsl(var(--primary) / 0.08);
+    color: hsl(var(--primary));
+  }
+
+  .plot-status-badge-error {
+    border-color: hsl(var(--destructive) / 0.35);
+    background: hsl(var(--destructive) / 0.08);
+    color: hsl(var(--destructive));
+  }
+
+  .plot-result-slot {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    border-radius: var(--radius);
+  }
+
+  .plot-loading-panel {
+    display: flex;
+    min-height: 15rem;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    border: 1px dashed hsl(var(--border));
+    border-radius: var(--radius);
+    background:
+      linear-gradient(90deg, hsl(var(--muted) / 0.18), hsl(var(--background) / 0.72), hsl(var(--muted) / 0.18));
+    color: hsl(var(--foreground));
+    padding: 1.25rem;
+  }
+
+  .plot-loading-panel-error {
+    border-color: hsl(var(--destructive) / 0.45);
+    background: hsl(var(--destructive) / 0.06);
+  }
+
+  .plot-loading-symbol {
+    display: inline-flex;
+    height: 3.25rem;
+    width: 3.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid hsl(var(--primary) / 0.28);
+    background: hsl(var(--card));
+    color: hsl(var(--primary));
+    box-shadow: 0 10px 24px hsl(var(--foreground) / 0.06);
+  }
+
+  .plot-loading-panel-error .plot-loading-symbol {
+    border-color: hsl(var(--destructive) / 0.35);
+    color: hsl(var(--destructive));
+  }
+
+  .plot-loading-copy {
+    max-width: 26rem;
+    min-width: 0;
+  }
+
+  .plot-loading-title {
+    color: hsl(var(--foreground));
+    font-size: 0.95rem;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .plot-loading-meta {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-top: 0.2rem;
+  }
+
+  .plot-loading-message {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.8rem;
+    line-height: 1.45;
+    margin-top: 0.45rem;
+  }
+
+  .plot-refresh-progress {
+    height: 0.18rem;
+    inset-inline: 0;
+    overflow: hidden;
+    position: absolute;
+    top: 0;
+    z-index: 3;
+  }
+
+  .plot-refresh-progress::before {
+    animation: plot-refresh-run 1.2s ease-in-out infinite;
+    background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+    content: "";
+    display: block;
+    height: 100%;
+    width: 42%;
+  }
+
   .polarimetry-split {
     --plot-split: 50%;
     display: grid;
@@ -292,6 +420,15 @@
     .split-resizer {
       display: none;
     }
+  }
+}
+
+@keyframes plot-refresh-run {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(250%);
   }
 }
 
