@@ -3,6 +3,7 @@ declare module "d3" {
   export function scaleLinear<T = number>(): any;
   export function geoPath(projection?: any): any;
   export function geoGraticule(): any;
+  export function zoom(): any;
 }
 
 declare module "d3-geo-projection" {

@@ -19,20 +19,27 @@ export function safePlotFilename(filename: string) {
   return filename.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "polarimetry-plot";
 }
 
-function downloadPlot(gd: HTMLElement, filename: string, format: PlotExportFormat) {
-  void Plotly.downloadImage(gd, {
+async function downloadPlot(gd: HTMLElement, filename: string, format: PlotExportFormat) {
+  const safeName = safePlotFilename(filename);
+  const imageOptions = {
     format,
-    filename,
     width: 1600,
     height: 1000,
     scale: format === "png" ? 2 : 1,
-  });
+  };
+
+  try {
+    const dataUrl = await Plotly.toImage(gd, imageOptions);
+    downloadDataUrl(dataUrl, `${safeName}.${format}`);
+  } catch (error) {
+    console.error("Plot export failed:", error);
+  }
 }
 
 export function downloadPlotlyFromContainer(container: HTMLElement | null, filename: string, format: PlotExportFormat) {
   const graphDiv = container?.querySelector<HTMLElement>(".js-plotly-plot, .plotly-graph-div");
   if (!graphDiv) return;
-  downloadPlot(graphDiv, safePlotFilename(filename), format);
+  void downloadPlot(graphDiv, filename, format);
 }
 
 export function paperPlotConfig(filename: string): Partial<Config> {
@@ -54,15 +61,24 @@ export function paperPlotConfig(filename: string): Partial<Config> {
         name: "Download SVG",
         title: "Download SVG",
         icon: svgIcon,
-        click: (gd: HTMLElement) => downloadPlot(gd, outputName, "svg"),
+        click: (gd: HTMLElement) => void downloadPlot(gd, outputName, "svg"),
       },
       {
         name: "Download PNG",
         title: "Download PNG",
         icon: pngIcon,
-        click: (gd: HTMLElement) => downloadPlot(gd, outputName, "png"),
+        click: (gd: HTMLElement) => void downloadPlot(gd, outputName, "png"),
       },
     ] as any,
     modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"],
   };
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

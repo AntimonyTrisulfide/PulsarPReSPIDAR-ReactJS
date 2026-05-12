@@ -2,6 +2,8 @@ export const DEFAULT_MEERTIME_NPZ_URL =
   "https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz";
 
 export const POLARISATION_QUANTITIES = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA", "I", "dPA"] as const;
+export const POLARISATION_STACK_QUANTITIES = ["PA", "EA", "P/I", "L/I", "|V/I|", "V/I"] as const;
+export const PHASE_SLICE_QUANTITIES = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA"] as const;
 
 export const POLARIMETRY_ENDPOINTS = {
   prepareDataset: "/prepare_dataset",
@@ -9,8 +11,10 @@ export const POLARIMETRY_ENDPOINTS = {
   profiles: "/export_profiles",
   heatmaps: "/export_heatmaps",
   polarisationHistogram: "/polarisation_histogram",
+  polarisationStack: "/polarisation_stack",
   polarisationStacks: "/polarisation_stacks",
-  polarisationPreprocess: "/polarisation_preprocess",
+  polarisationParams: "/polarisation_params",
+  phaseSliceHistogram: "/phase_slice_histogram",
   phaseSliceHistograms: "/phase_slice_histograms",
 } as const;
 
@@ -156,27 +160,33 @@ export async function fetchHeatmapsData(source: DatasetSource, phaseRange: Phase
   );
 }
 
-export async function fetchPolarisationHistogram(source: DatasetSource, quantity: string, phaseRange: PhaseRange) {
+export async function fetchPolarisationHistogram(source: DatasetSource, quantity: string, phaseRange: PhaseRange, onPulse: PhaseRange) {
   return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationHistogram,
     source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
-      on_pulse_start: String(phaseRange.start),
-      on_pulse_end: String(phaseRange.end),
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
       quantity,
     }),
   );
 }
 
-export async function fetchPolarisationHistograms(source: DatasetSource, phaseRange: PhaseRange) {
+export async function fetchPolarisationHistograms(
+  source: DatasetSource,
+  phaseRange: PhaseRange,
+  onPulse: PhaseRange,
+  onItem?: (quantity: string, payload: unknown) => void,
+) {
   const results: Record<string, unknown> = {};
   let successCount = 0;
 
   for (const quantity of POLARISATION_QUANTITIES) {
     try {
-      results[quantity] = await fetchPolarisationHistogram(source, quantity, phaseRange);
+      results[quantity] = await fetchPolarisationHistogram(source, quantity, phaseRange, onPulse);
+      onItem?.(quantity, results[quantity]);
       successCount += 1;
     } catch (error) {
       console.error(`Error fetching polarisation histogram ${quantity}:`, error);
@@ -191,22 +201,70 @@ export async function fetchPolarisationHistograms(source: DatasetSource, phaseRa
   return results;
 }
 
-export async function fetchPolarisationStacks(source: DatasetSource, phaseRange: PhaseRange) {
+export async function fetchPolarisationStack(source: DatasetSource, quantity: string, phaseRange: PhaseRange, onPulse: PhaseRange) {
   return postDatasetJson(
-    POLARIMETRY_ENDPOINTS.polarisationStacks,
+    POLARIMETRY_ENDPOINTS.polarisationStack,
     source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
       end_phase: String(phaseRange.end),
-      on_pulse_start: String(phaseRange.start),
-      on_pulse_end: String(phaseRange.end),
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
+      quantity,
     }),
   );
 }
 
+export async function fetchPolarisationStacks(
+  source: DatasetSource,
+  phaseRange: PhaseRange,
+  onPulse: PhaseRange,
+  onItem?: (quantity: string, payload: unknown) => void,
+) {
+  const aggregate: {
+    obs_id?: string;
+    start_phase?: number;
+    end_phase?: number;
+    on_pulse?: PhaseRange;
+    phase_axis?: number[];
+    pulse_number?: number[];
+    quantities: Array<{ key?: string; name: string; data: number[][]; vmin?: number; vmax?: number }>;
+  } = {
+    quantities: [],
+  };
+  let successCount = 0;
+
+  for (const quantity of POLARISATION_STACK_QUANTITIES) {
+    try {
+      const payload = await fetchPolarisationStack(source, quantity, phaseRange, onPulse) as any;
+      if (!aggregate.obs_id) {
+        aggregate.obs_id = payload.obs_id;
+        aggregate.start_phase = payload.start_phase;
+        aggregate.end_phase = payload.end_phase;
+        aggregate.on_pulse = payload.on_pulse;
+        aggregate.phase_axis = payload.phase_axis;
+        aggregate.pulse_number = payload.pulse_number;
+      }
+      if (payload.quantity) {
+        aggregate.quantities.push(payload.quantity);
+        onItem?.(quantity, payload);
+        successCount += 1;
+      }
+    } catch (error) {
+      console.error(`Error fetching polarisation stack ${quantity}:`, error);
+    }
+  }
+
+  if (successCount === 0) {
+    throw new Error("All polarisation stack requests failed.");
+  }
+
+  return aggregate;
+}
+
 export async function fetchPolarisationParams(source: DatasetSource, phaseRange: PhaseRange, onPulse: PhaseRange, maxPulses = 0) {
   return postDatasetJson(
-    POLARIMETRY_ENDPOINTS.polarisationPreprocess,
+    POLARIMETRY_ENDPOINTS.polarisationParams,
     source,
     new URLSearchParams({
       start_phase: String(phaseRange.start),
@@ -218,16 +276,82 @@ export async function fetchPolarisationParams(source: DatasetSource, phaseRange:
   );
 }
 
-export async function fetchPhaseSliceHistograms(source: DatasetSource, phases: { left: number; mid: number; right: number }) {
+export async function fetchPhaseSliceHistogram(
+  source: DatasetSource,
+  quantity: string,
+  phases: { left: number; mid: number; right: number },
+  onPulse: PhaseRange,
+) {
   return postDatasetJson(
-    POLARIMETRY_ENDPOINTS.phaseSliceHistograms,
+    POLARIMETRY_ENDPOINTS.phaseSliceHistogram,
     source,
     new URLSearchParams({
       left_phase: String(phases.left),
       mid_phase: String(phases.mid),
       right_phase: String(phases.right),
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
+      quantity,
     }),
   );
+}
+
+export async function fetchPhaseSliceHistograms(
+  source: DatasetSource,
+  phases: { left: number; mid: number; right: number },
+  onPulse: PhaseRange,
+  onItem?: (quantity: string, payload: unknown) => void,
+) {
+  const aggregate: {
+    obs_id?: string;
+    phase_values?: number[];
+    phase_bins?: number[];
+    quantities: Array<{
+      key?: string;
+      name: string;
+      phase_slices: Array<{
+        phase_value: number;
+        phase_bin_index: number;
+        bin_edges: number[];
+        counts: number[];
+        x_limits?: [number, number] | null;
+        stats: {
+          min: number;
+          max: number;
+          mean: number;
+          std: number;
+          num_pulses: number;
+        };
+      }>;
+    }>;
+  } = {
+    quantities: [],
+  };
+  let successCount = 0;
+
+  for (const quantity of PHASE_SLICE_QUANTITIES) {
+    try {
+      const payload = await fetchPhaseSliceHistogram(source, quantity, phases, onPulse) as any;
+      if (!aggregate.obs_id) {
+        aggregate.obs_id = payload.obs_id;
+        aggregate.phase_values = payload.phase_values;
+        aggregate.phase_bins = payload.phase_bins;
+      }
+      if (payload.quantity) {
+        aggregate.quantities.push(payload.quantity);
+        onItem?.(quantity, payload);
+        successCount += 1;
+      }
+    } catch (error) {
+      console.error(`Error fetching phase-slice histogram ${quantity}:`, error);
+    }
+  }
+
+  if (successCount === 0) {
+    throw new Error("All phase-slice histogram requests failed.");
+  }
+
+  return aggregate;
 }
 
 function resolveRemoteFetchUrl(url: string) {

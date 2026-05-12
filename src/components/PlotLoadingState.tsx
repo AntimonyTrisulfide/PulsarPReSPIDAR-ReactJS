@@ -47,7 +47,7 @@ export function QueueStatusSummary({ concurrency, queuedCount, runningCount }: Q
   const label = isBusy
     ? `${runningCount} running, ${queuedCount} queued`
     : concurrency === 1
-      ? "512 MB safe queue idle"
+      ? "Queue idle"
       : `${concurrency} backend workers idle`;
 
   return (
@@ -78,7 +78,7 @@ function PlotLoadingPanel({ label, state }: { label: string; state: PlotRequestV
   const message =
     state.message ??
     (isQueued
-      ? "Waiting for the backend queue so the 512 MB server does not restart."
+      ? "Waiting for the backend queue."
       : "Sending data to the analysis backend.");
 
   return (

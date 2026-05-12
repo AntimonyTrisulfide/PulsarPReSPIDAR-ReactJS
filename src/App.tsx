@@ -110,6 +110,7 @@ const App: React.FC = () => {
   const [isLoadingRemoteFile, setIsLoadingRemoteFile] = useState(false);
   const [isPreparingBackendDataset, setIsPreparingBackendDataset] = useState(false);
   const [preparedDataKey, setPreparedDataKey] = useState<string | null>(null);
+  const [datasetOnPulse, setDatasetOnPulse] = useState({ start: 0.0, end: 1.0 });
   const [plotRequestStates, setPlotRequestStates] = useState<Record<PlotRequestKey, PlotRequestState>>(createPlotRequestStates);
   const activePlotRequestsRef = useRef(0);
   const queuedPlotRequestsRef = useRef<QueuedPlotRequest[]>([]);
@@ -214,17 +215,22 @@ const App: React.FC = () => {
         status: "queued",
         version: requestVersion,
         message: PLOT_REQUEST_CONCURRENCY === 1
-          ? "Waiting for the 512 MB-safe backend queue."
+          ? "Waiting for the backend queue."
           : "Waiting for an available backend worker.",
       },
     }));
     processPlotQueue();
   };
 
-  const applyNewFile = (incoming: File | Blob, nextPreparedDataKey: string | null = null) => {
+  const applyNewFile = (
+    incoming: File | Blob,
+    nextPreparedDataKey: string | null = null,
+    nextOnPulse: { start: number; end: number } = { start: 0, end: 1 },
+  ) => {
     resetPlotRequestQueue();
     setFile(incoming);
     setPreparedDataKey(nextPreparedDataKey);
+    setDatasetOnPulse(nextOnPulse);
     setObsMetadata(null);
     setPoincareAitoffData(null);
     setPhaseHistogramData(null);
@@ -265,8 +271,9 @@ const App: React.FC = () => {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
-      const dataKey = await prepareBackendDataset(selectedFile, { start: 0, end: 1 });
-      applyNewFile(selectedFile, dataKey);
+      const defaultOnPulse = { start: 0, end: 1 };
+      const dataKey = await prepareBackendDataset(selectedFile, defaultOnPulse);
+      applyNewFile(selectedFile, dataKey, defaultOnPulse);
     }
   };
 
@@ -296,8 +303,9 @@ const App: React.FC = () => {
       console.warn("Only .npz files are supported.");
       return;
     }
-    const dataKey = await prepareBackendDataset(droppedFile, { start: 0, end: 1 });
-    applyNewFile(droppedFile, dataKey);
+    const defaultOnPulse = { start: 0, end: 1 };
+    const dataKey = await prepareBackendDataset(droppedFile, defaultOnPulse);
+    applyNewFile(droppedFile, dataKey, defaultOnPulse);
   };
   const fetchPoincareAitoffData = async () => {
     const source = getDatasetSource();
@@ -360,7 +368,7 @@ const App: React.FC = () => {
       const remoteFile = await loadRemoteNpz(url, username, password);
       const { start, end, mid } = remoteFile.onPulse;
       const dataKey = await prepareBackendDataset(remoteFile.blob, { start, end });
-      applyNewFile(remoteFile.blob, dataKey);
+      applyNewFile(remoteFile.blob, dataKey, { start, end });
       setObsMetadata(remoteFile.metadata);
       setLeftPhaseHist(start);
       setMidPhaseHist(mid);
@@ -426,9 +434,15 @@ const App: React.FC = () => {
     }
 
     try {
+      setPolHistogramData(null);
       const results = await requestPolarisationHistograms(source, {
         start: startPhasePolHist,
         end: endPhasePolHist,
+      }, datasetOnPulse, (quantity, payload) => {
+        setPolHistogramData((current: Record<string, any> | null) => ({
+          ...(current ?? {}),
+          [quantity]: payload,
+        }));
       });
       setPolHistogramData(results as Record<string, any>);
     } catch (err) {
@@ -450,9 +464,28 @@ const App: React.FC = () => {
     }
 
     try {
+      setPolStacksData(null);
       const result = await requestPolarisationStacks(source, {
         start: startPhasePolStacks,
         end: endPhasePolStacks,
+      }, datasetOnPulse, (_quantity, payload) => {
+        setPolStacksData((current: any) => {
+          const nextQuantity = (payload as any)?.quantity;
+          if (!nextQuantity) return current;
+          const base = current ?? {
+            obs_id: (payload as any)?.obs_id,
+            start_phase: (payload as any)?.start_phase,
+            end_phase: (payload as any)?.end_phase,
+            on_pulse: (payload as any)?.on_pulse,
+            phase_axis: (payload as any)?.phase_axis ?? [],
+            pulse_number: (payload as any)?.pulse_number ?? [],
+            quantities: [],
+          };
+          return {
+            ...base,
+            quantities: [...base.quantities, nextQuantity],
+          };
+        });
       });
       setPolStacksData(result);
     } catch (err) {
@@ -507,10 +540,26 @@ const App: React.FC = () => {
     }
 
     try {
+      setPhaseHistogramData(null);
       const result = await requestPhaseSliceHistograms(source, {
         left: leftPhaseHist,
         mid: midPhaseHist,
         right: rightPhaseHist,
+      }, datasetOnPulse, (_quantity, payload) => {
+        setPhaseHistogramData((current: any) => {
+          const nextQuantity = (payload as any)?.quantity;
+          if (!nextQuantity) return current;
+          const base = current ?? {
+            obs_id: (payload as any)?.obs_id,
+            phase_values: (payload as any)?.phase_values ?? [],
+            phase_bins: (payload as any)?.phase_bins ?? [],
+            quantities: [],
+          };
+          return {
+            ...base,
+            quantities: [...base.quantities, nextQuantity],
+          };
+        });
       });
       setPhaseHistogramData(result);
     } catch (err) {

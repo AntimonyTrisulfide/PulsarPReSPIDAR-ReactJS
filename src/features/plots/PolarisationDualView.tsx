@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, useId, type CSSProperties } from "react";
 import Plot from "react-plotly.js";
-import { geoGraticule, geoPath, scaleLinear, select } from "d3";
+import { geoGraticule, geoPath, scaleLinear, select, zoom } from "d3";
 import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig, safePlotFilename, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { paperPlotConfig, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { downloadSvgFromScope } from "@/shared/plot/svgExport";
+import { useElementSize } from "@/shared/plot/useElementSize";
 
 // Memoized Plot component to prevent unnecessary re-renders
 const MemoizedPlot = memo(Plot);
@@ -172,6 +174,11 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
 }: DualAitoffProjectionProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gradientId = `dual-aitoff-phase-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const size = useElementSize(
+    containerRef,
+    fullscreen ? { width: 1320, height: 760 } : { width: 1080, height: 560 },
+    { width: 420, height: 340 },
+  );
 
   const phaseScale = useMemo(() => {
     const span = endPhase - startPhase;
@@ -186,9 +193,10 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
     const target = containerRef.current;
     if (!target) return;
 
-    const width = fullscreen ? 1320 : 1080;
-    const height = fullscreen ? 760 : 560;
-    const margin = { top: 28, right: 90, bottom: 78, left: 90 };
+    const width = Math.max(420, Math.round(size.width));
+    const height = Math.max(340, Math.round(size.height));
+    const metrics = getDualAitoffMetrics(width, height, fullscreen);
+    const { margin, labelFontSize, pointRadius, tickLength } = metrics;
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
@@ -196,8 +204,8 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
 
     const svg = select(target)
       .append("svg")
-      .attr("width", "100%")
-      .attr("height", "100%")
+      .attr("width", width)
+      .attr("height", height)
       .attr("viewBox", `0 0 ${width} ${height}`)
       .attr("preserveAspectRatio", "xMidYMid meet")
       .style("background-color", bgColor);
@@ -209,21 +217,22 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       { type: "Sphere" },
     );
     const path = geoPath(projection);
-    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const zoomLayer = svg.append("g").attr("class", "dual-aitoff-zoom-layer");
+    const g = zoomLayer.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
     g.append("path")
       .datum({ type: "Sphere" })
       .attr("d", path)
       .attr("fill", bgColor)
       .attr("stroke", axisColor)
-      .attr("stroke-width", 1.2);
+      .attr("stroke-width", metrics.axisStrokeWidth);
 
     g.append("path")
       .datum(geoGraticule().step([45, 30])())
       .attr("d", path)
       .attr("fill", "none")
       .attr("stroke", gridColor)
-      .attr("stroke-width", 0.8)
+      .attr("stroke-width", metrics.gridStrokeWidth)
       .attr("stroke-opacity", 0.78);
 
     [makeAitoffLineString(0, "lon"), makeAitoffLineString(0, "lat")].forEach(line => {
@@ -232,7 +241,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
         .attr("d", path)
         .attr("fill", "none")
         .attr("stroke", mutedColor)
-        .attr("stroke-width", 1)
+        .attr("stroke-width", metrics.axisLineStrokeWidth)
         .attr("stroke-opacity", 0.82);
     });
 
@@ -243,11 +252,11 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .attr("class", "dual-aitoff-point")
       .attr("cx", (point: DualAitoffPoint) => projection([point.lon, point.lat])?.[0] ?? 0)
       .attr("cy", (point: DualAitoffPoint) => projection([point.lon, point.lat])?.[1] ?? 0)
-      .attr("r", fullscreen ? 3.8 : 3)
+      .attr("r", pointRadius)
       .attr("fill", (point: DualAitoffPoint) => phaseScale(point.phase))
       .attr("opacity", 0.9)
       .attr("stroke", bgColor)
-      .attr("stroke-width", 0.45);
+      .attr("stroke-width", metrics.pointStrokeWidth);
 
     circles.append("title")
       .text((point: DualAitoffPoint) => `Lon: ${point.lon.toFixed(2)} deg\nLat: ${point.lat.toFixed(2)} deg\nPhase: ${point.phase.toFixed(4)}`);
@@ -257,7 +266,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
         .attr("x", innerWidth / 2)
         .attr("y", innerHeight / 2)
         .attr("text-anchor", "middle")
-        .attr("font-size", 14)
+        .attr("font-size", labelFontSize)
         .attr("fill", mutedColor)
         .text("No finite Poincare coordinates");
     }
@@ -267,15 +276,15 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .enter()
       .append("text")
       .attr("class", "dual-aitoff-lat-label")
-      .attr("x", (lat: number) => (projection([-178, lat])?.[0] ?? 0) - 10)
+      .attr("x", (lat: number) => (projection([-178, lat])?.[0] ?? 0) - labelFontSize * 0.9)
       .attr("y", (lat: number) => projection([-178, lat])?.[1] ?? 0)
       .attr("text-anchor", "end")
       .attr("dominant-baseline", "middle")
-      .attr("font-size", 11)
+      .attr("font-size", labelFontSize)
       .attr("fill", mutedColor)
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
-      .attr("stroke-width", 4)
+      .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lat: number) => `${lat} deg`);
 
     g.selectAll(".dual-aitoff-lon-tick")
@@ -284,11 +293,11 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .append("line")
       .attr("class", "dual-aitoff-lon-tick")
       .attr("x1", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y1", (lon: number) => (projection([lon, 0])?.[1] ?? 0) - 5)
+      .attr("y1", (lon: number) => (projection([lon, 0])?.[1] ?? 0) - tickLength)
       .attr("x2", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y2", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 5)
+      .attr("y2", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + tickLength)
       .attr("stroke", mutedColor)
-      .attr("stroke-width", 0.9)
+      .attr("stroke-width", metrics.tickStrokeWidth)
       .attr("stroke-linecap", "round")
       .attr("opacity", 0.86);
 
@@ -298,18 +307,19 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .append("text")
       .attr("class", "dual-aitoff-lon-label")
       .attr("x", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 17)
+      .attr("y", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + labelFontSize * 1.5)
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "hanging")
-      .attr("font-size", 11)
+      .attr("font-size", labelFontSize)
       .attr("fill", mutedColor)
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
-      .attr("stroke-width", 4)
+      .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lon: number) => `${lon} deg`);
 
-    drawDualAitoffColorbar(svg, width, height, gradientId, startPhase, endPhase, phaseScale, axisColor, mutedColor);
-  }, [axisColor, bgColor, endPhase, fullscreen, gradientId, gridColor, mutedColor, phaseScale, points, startPhase]);
+    drawDualAitoffColorbar(svg, width, height, gradientId, startPhase, endPhase, phaseScale, axisColor, mutedColor, labelFontSize);
+    applySvgZoom(svg, zoomLayer, width, height);
+  }, [axisColor, bgColor, endPhase, fullscreen, gradientId, gridColor, mutedColor, phaseScale, points, size, startPhase]);
 
   return <div ref={containerRef} className={className} />;
 });
@@ -623,7 +633,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
 
   const exportDualAitoff = useCallback((format: PlotExportFormat, source: "inline" | "fullscreen" = "inline") => {
     const scope = source === "fullscreen" ? fullscreenAitoffScopeRef.current : leftAitoffScopeRef.current;
-    downloadSvgFromScope(scope, `poincare-dual-aitoff${source === "fullscreen" ? "-fullscreen" : ""}`, format);
+    downloadSvgFromScope(scope, `poincare-dual-aitoff${source === "fullscreen" ? "-fullscreen" : ""}`, format, DUAL_AITOFF_PNG_EXPORT_SCALE);
   }, []);
 
   const dispatchResize = useCallback((force = false) => {
@@ -979,6 +989,46 @@ function normalizeLongitude(value: number) {
   return ((((value + 180) % 360) + 360) % 360) - 180;
 }
 
+function getDualAitoffMetrics(width: number, height: number, fullscreen: boolean) {
+  const minSide = Math.min(width, height);
+  const labelFontSize = Math.round(clamp(minSide / 36, 14, fullscreen ? 21 : 18));
+  const margin = {
+    top: Math.round(clamp(labelFontSize * 2.1, 30, 50)),
+    right: Math.round(clamp(labelFontSize * 6, 82, Math.max(84, width * 0.16))),
+    bottom: Math.round(clamp(labelFontSize * 5.7, 80, 118)),
+    left: Math.round(clamp(labelFontSize * 6, 82, Math.max(84, width * 0.16))),
+  };
+
+  return {
+    margin,
+    labelFontSize,
+    pointRadius: clamp(minSide / 152, 3.3, fullscreen ? 5.6 : 4.6),
+    pointStrokeWidth: clamp(minSide / 1300, 0.45, 0.8),
+    axisStrokeWidth: clamp(minSide / 520, 1.2, 1.8),
+    axisLineStrokeWidth: clamp(minSide / 660, 1, 1.55),
+    gridStrokeWidth: clamp(minSide / 800, 0.8, 1.2),
+    tickLength: clamp(minSide / 100, 5, 8),
+    tickStrokeWidth: clamp(minSide / 720, 0.9, 1.35),
+  };
+}
+
+function applySvgZoom(svg: any, zoomLayer: any, width: number, height: number) {
+  const behavior = zoom()
+    .scaleExtent([1, 7])
+    .translateExtent([[-width * 0.55, -height * 0.55], [width * 1.55, height * 1.55]])
+    .extent([[0, 0], [width, height]])
+    .on("zoom", (event: any) => {
+      zoomLayer.attr("transform", event.transform.toString());
+    });
+
+  svg.call(behavior);
+  svg.on("dblclick.zoom", null);
+  svg
+    .style("cursor", "grab")
+    .on("pointerdown", () => svg.style("cursor", "grabbing"))
+    .on("pointerup pointerleave", () => svg.style("cursor", "grab"));
+}
+
 function makeAitoffLineString(value: number, axis: "lat" | "lon") {
   const coordinates: [number, number][] = [];
   for (let step = -90; step <= 90; step += 2) {
@@ -997,11 +1047,12 @@ function drawDualAitoffColorbar(
   colorScale: (value: number) => string,
   axisColor: string,
   mutedColor: string,
+  labelFontSize: number,
 ) {
-  const colorbarWidth = 280;
-  const colorbarHeight = 10;
+  const colorbarWidth = Math.round(clamp(width * 0.34, 210, 380));
+  const colorbarHeight = clamp(height / 72, 10, 15);
   const colorbarX = width / 2 - colorbarWidth / 2;
-  const colorbarY = height - 38;
+  const colorbarY = height - labelFontSize * 2.9;
   const min = startPhase === endPhase ? startPhase - 0.5 : startPhase;
   const max = startPhase === endPhase ? endPhase + 0.5 : endPhase;
   const defs = svg.append("defs");
@@ -1023,79 +1074,25 @@ function drawDualAitoffColorbar(
 
   svg.append("text")
     .attr("x", colorbarX)
-    .attr("y", colorbarY + 26)
+    .attr("y", colorbarY + labelFontSize * 2.05)
     .attr("text-anchor", "start")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text(startPhase.toFixed(3));
 
   svg.append("text")
     .attr("x", colorbarX + colorbarWidth / 2)
-    .attr("y", colorbarY - 8)
+    .attr("y", colorbarY - labelFontSize * 0.7)
     .attr("text-anchor", "middle")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text("Phase");
 
   svg.append("text")
     .attr("x", colorbarX + colorbarWidth)
-    .attr("y", colorbarY + 26)
+    .attr("y", colorbarY + labelFontSize * 2.05)
     .attr("text-anchor", "end")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text(endPhase.toFixed(3));
-}
-
-function downloadSvgFromScope(scope: HTMLElement | null, filename: string, format: PlotExportFormat) {
-  const svg = scope?.querySelector("svg");
-  if (!svg) return;
-
-  const clonedSvg = svg.cloneNode(true) as SVGSVGElement;
-  clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  const viewBox = clonedSvg.getAttribute("viewBox")?.split(/\s+/).map(Number) ?? [0, 0, 1600, 1000];
-  const [, , width, height] = viewBox;
-  clonedSvg.setAttribute("width", String(width));
-  clonedSvg.setAttribute("height", String(height));
-  const serialized = new XMLSerializer().serializeToString(clonedSvg);
-  const safeName = safePlotFilename(filename);
-
-  if (format === "svg") {
-    downloadBlob(new Blob([serialized], { type: "image/svg+xml;charset=utf-8" }), `${safeName}.svg`);
-    return;
-  }
-
-  const image = new Image();
-  const svgBlob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
-  const svgUrl = URL.createObjectURL(svgBlob);
-
-  image.onload = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(width * DUAL_AITOFF_PNG_EXPORT_SCALE);
-    canvas.height = Math.round(height * DUAL_AITOFF_PNG_EXPORT_SCALE);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      URL.revokeObjectURL(svgUrl);
-      return;
-    }
-    ctx.imageSmoothingEnabled = true;
-    ctx.scale(DUAL_AITOFF_PNG_EXPORT_SCALE, DUAL_AITOFF_PNG_EXPORT_SCALE);
-    ctx.drawImage(image, 0, 0);
-    canvas.toBlob(blob => {
-      if (blob) downloadBlob(blob, `${safeName}.png`);
-      URL.revokeObjectURL(svgUrl);
-    }, "image/png");
-  };
-  image.onerror = () => URL.revokeObjectURL(svgUrl);
-  image.src = svgUrl;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }

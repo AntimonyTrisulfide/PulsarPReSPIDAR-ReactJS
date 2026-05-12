@@ -1,10 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Plot from "react-plotly.js";
-import { geoGraticule, geoPath, scaleLinear, select } from "d3";
+import { geoGraticule, geoPath, scaleLinear, select, zoom } from "d3";
 import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { paperPlotConfig, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { downloadSvgElement } from "@/shared/plot/svgExport";
+import { useElementSize } from "@/shared/plot/useElementSize";
 
 type AitoffData = {
   lon: number[];
@@ -32,6 +34,8 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   const containerRef = useRef<HTMLDivElement>(null);
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const gradientId = `aitoff-colorbar-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const inlineAitoffSize = useElementSize(containerRef, { width: 1080, height: 620 }, { width: 420, height: 360 });
+  const fullscreenAitoffSize = useElementSize(fullscreenRef, { width: 1320, height: 760 }, { width: 520, height: 420 });
 
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#d7dde8" : "#172033";
@@ -130,22 +134,11 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
     font: { color: axisColor, family: "Inter, ui-sans-serif, system-ui, sans-serif" },
   }), [axisColor, bgColor, gridColor]);
 
-  useEffect(() => {
-    if (view === "aitoff" && containerRef.current) {
-      drawAitoff(containerRef.current);
-    }
-  }, [axisColor, bgColor, colorScale, colorDomain, gradientId, gridColor, mutedColor, points, view]);
-
-  useEffect(() => {
-    if (fullscreenKey === "aitoff" && fullscreenRef.current) {
-      drawAitoff(fullscreenRef.current, true);
-    }
-  }, [axisColor, bgColor, colorScale, colorDomain, fullscreenKey, gradientId, gridColor, mutedColor, points]);
-
-  function drawAitoff(target: HTMLDivElement, isFullscreen = false) {
-    const width = isFullscreen ? 1320 : 1080;
-    const height = isFullscreen ? 760 : 620;
-    const margin = { top: 34, right: 96, bottom: 76, left: 96 };
+  const drawAitoff = useCallback((target: HTMLDivElement, size: { width: number; height: number }, isFullscreen = false) => {
+    const width = Math.max(420, Math.round(size.width));
+    const height = Math.max(360, Math.round(size.height));
+    const metrics = getAitoffMetrics(width, height, isFullscreen);
+    const { margin, labelFontSize, pointRadius, tickLength } = metrics;
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
@@ -153,8 +146,8 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
 
     const svg = select(target)
       .append("svg")
-      .attr("width", "100%")
-      .attr("height", "100%")
+      .attr("width", width)
+      .attr("height", height)
       .attr("viewBox", `0 0 ${width} ${height}`)
       .attr("preserveAspectRatio", "xMidYMid meet")
       .style("background-color", bgColor);
@@ -166,21 +159,22 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       { type: "Sphere" },
     );
     const path = geoPath(projection);
-    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const zoomLayer = svg.append("g").attr("class", "aitoff-zoom-layer");
+    const g = zoomLayer.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
     g.append("path")
       .datum({ type: "Sphere" })
       .attr("d", path)
       .attr("fill", bgColor)
       .attr("stroke", axisColor)
-      .attr("stroke-width", 1.25);
+      .attr("stroke-width", metrics.axisStrokeWidth);
 
     g.append("path")
       .datum(geoGraticule().step([45, 30])())
       .attr("d", path)
       .attr("fill", "none")
       .attr("stroke", gridColor)
-      .attr("stroke-width", 0.8)
+      .attr("stroke-width", metrics.gridStrokeWidth)
       .attr("stroke-opacity", 0.78);
 
     [makeLineString(0, "lon"), makeLineString(0, "lat")].forEach(line => {
@@ -189,7 +183,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
         .attr("d", path)
         .attr("fill", "none")
         .attr("stroke", mutedColor)
-        .attr("stroke-width", 1)
+        .attr("stroke-width", metrics.axisLineStrokeWidth)
         .attr("stroke-opacity", 0.8);
     });
 
@@ -200,26 +194,26 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .attr("class", "aitoff-point")
       .attr("cx", (point: AitoffPoint) => projection([point.lon, point.lat])?.[0] ?? 0)
       .attr("cy", (point: AitoffPoint) => projection([point.lon, point.lat])?.[1] ?? 0)
-      .attr("r", isFullscreen ? 3.8 : 3.1)
+      .attr("r", pointRadius)
       .attr("fill", (point: AitoffPoint) => colorScale(point.lat))
       .attr("opacity", 0.86)
       .attr("stroke", bgColor)
-      .attr("stroke-width", 0.45);
+      .attr("stroke-width", metrics.pointStrokeWidth);
 
     g.selectAll(".aitoff-lat-label")
       .data(latLabelValues)
       .enter()
       .append("text")
       .attr("class", "aitoff-lat-label")
-      .attr("x", (lat: number) => (projection([-178, lat])?.[0] ?? 0) - 10)
+      .attr("x", (lat: number) => (projection([-178, lat])?.[0] ?? 0) - labelFontSize * 0.9)
       .attr("y", (lat: number) => projection([-178, lat])?.[1] ?? 0)
       .attr("text-anchor", "end")
       .attr("dominant-baseline", "middle")
-      .attr("font-size", 11)
+      .attr("font-size", labelFontSize)
       .attr("fill", mutedColor)
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
-      .attr("stroke-width", 4)
+      .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lat: number) => `${lat} deg`);
 
     g.selectAll(".aitoff-lon-tick")
@@ -228,11 +222,11 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .append("line")
       .attr("class", "aitoff-lon-tick")
       .attr("x1", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y1", (lon: number) => (projection([lon, 0])?.[1] ?? 0) - 5)
+      .attr("y1", (lon: number) => (projection([lon, 0])?.[1] ?? 0) - tickLength)
       .attr("x2", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y2", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 5)
+      .attr("y2", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + tickLength)
       .attr("stroke", mutedColor)
-      .attr("stroke-width", 0.9)
+      .attr("stroke-width", metrics.tickStrokeWidth)
       .attr("stroke-linecap", "round")
       .attr("opacity", 0.86);
 
@@ -242,61 +236,37 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .append("text")
       .attr("class", "aitoff-lon-label")
       .attr("x", (lon: number) => projection([lon, 0])?.[0] ?? 0)
-      .attr("y", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + 17)
+      .attr("y", (lon: number) => (projection([lon, 0])?.[1] ?? 0) + labelFontSize * 1.5)
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "hanging")
-      .attr("font-size", 11)
+      .attr("font-size", labelFontSize)
       .attr("fill", mutedColor)
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
-      .attr("stroke-width", 4)
+      .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lon: number) => `${lon} deg`);
 
-    drawColorbar(svg, width, height, gradientId, colorDomain, colorScale, axisColor, mutedColor);
-  }
+    drawColorbar(svg, width, height, gradientId, colorDomain, colorScale, axisColor, mutedColor, labelFontSize);
+    applySvgZoom(svg, zoomLayer, width, height);
+  }, [axisColor, bgColor, colorDomain, colorScale, gradientId, gridColor, mutedColor, points]);
 
-  const exportAitoff = (format: "svg" | "png", source: "inline" | "fullscreen" = "inline") => {
+  useEffect(() => {
+    if (view === "aitoff" && containerRef.current) {
+      drawAitoff(containerRef.current, inlineAitoffSize);
+    }
+  }, [drawAitoff, inlineAitoffSize, view]);
+
+  useEffect(() => {
+    if (fullscreenKey === "aitoff" && fullscreenRef.current) {
+      drawAitoff(fullscreenRef.current, fullscreenAitoffSize, true);
+    }
+  }, [drawAitoff, fullscreenAitoffSize, fullscreenKey]);
+
+  const exportAitoff = (format: PlotExportFormat, source: "inline" | "fullscreen" = "inline") => {
     const sourceRef = source === "fullscreen" ? fullscreenRef : containerRef;
     const svg = sourceRef.current?.querySelector("svg");
-    if (!svg) return;
-
-    const clonedSvg = svg.cloneNode(true) as SVGSVGElement;
-    clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    const viewBox = clonedSvg.getAttribute("viewBox")?.split(/\s+/).map(Number) ?? [0, 0, 1600, 1000];
-    const [, , width, height] = viewBox;
-    clonedSvg.setAttribute("width", String(width));
-    clonedSvg.setAttribute("height", String(height));
-    const serialized = new XMLSerializer().serializeToString(clonedSvg);
     const filename = `fixed-phase-poincare-aitoff-${phaseValue?.toFixed(3) ?? "phase"}`;
-
-    if (format === "svg") {
-      downloadBlob(new Blob([serialized], { type: "image/svg+xml;charset=utf-8" }), `${filename}.svg`);
-      return;
-    }
-
-    const image = new Image();
-    const svgBlob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
-    const svgUrl = URL.createObjectURL(svgBlob);
-
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(width * AITOFF_PNG_EXPORT_SCALE);
-      canvas.height = Math.round(height * AITOFF_PNG_EXPORT_SCALE);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(svgUrl);
-        return;
-      }
-      ctx.imageSmoothingEnabled = true;
-      ctx.scale(AITOFF_PNG_EXPORT_SCALE, AITOFF_PNG_EXPORT_SCALE);
-      ctx.drawImage(image, 0, 0);
-      canvas.toBlob(blob => {
-        if (blob) downloadBlob(blob, `${filename}.png`);
-        URL.revokeObjectURL(svgUrl);
-      }, "image/png");
-    };
-    image.onerror = () => URL.revokeObjectURL(svgUrl);
-    image.src = svgUrl;
+    downloadSvgElement(svg ?? null, filename, format, AITOFF_PNG_EXPORT_SCALE);
   };
 
   if (!data) return null;
@@ -339,7 +309,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       </div>
 
       {view === "aitoff" ? (
-        <div ref={containerRef} className="h-[620px] w-full" />
+        <div ref={containerRef} className="h-[620px] min-h-[420px] w-full overflow-hidden rounded-md" />
       ) : (
         <Plot
           data={[sphere3d, points3d]}
@@ -357,7 +327,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
               <div className="plot-toolbar mb-2">
                 <PlotExportButtons filename="fixed-phase-poincare-aitoff-fullscreen" onExport={format => exportAitoff(format, "fullscreen")} />
               </div>
-              <div ref={fullscreenRef} className="h-[calc(100%-2.5rem)] w-full" />
+              <div ref={fullscreenRef} className="h-[calc(100%-2.5rem)] w-full overflow-hidden rounded-md" />
             </div>
           ) : (
             <div className="plot-export-scope h-full w-full pr-8 pt-8">
@@ -379,17 +349,6 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   );
 }
 
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 function toDegrees(value: number) {
   return (value * 180) / Math.PI;
 }
@@ -404,6 +363,46 @@ function clamp(value: number, min: number, max: number) {
 
 function normalizeLongitude(value: number) {
   return ((((value + 180) % 360) + 360) % 360) - 180;
+}
+
+function getAitoffMetrics(width: number, height: number, isFullscreen: boolean) {
+  const minSide = Math.min(width, height);
+  const labelFontSize = Math.round(clamp(minSide / 36, 14, isFullscreen ? 21 : 18));
+  const margin = {
+    top: Math.round(clamp(labelFontSize * 2.2, 30, 52)),
+    right: Math.round(clamp(labelFontSize * 6.1, 82, Math.max(84, width * 0.16))),
+    bottom: Math.round(clamp(labelFontSize * 5.6, 78, 116)),
+    left: Math.round(clamp(labelFontSize * 6.1, 82, Math.max(84, width * 0.16))),
+  };
+
+  return {
+    margin,
+    labelFontSize,
+    pointRadius: clamp(minSide / 150, 3.4, isFullscreen ? 5.6 : 4.6),
+    pointStrokeWidth: clamp(minSide / 1300, 0.45, 0.8),
+    axisStrokeWidth: clamp(minSide / 520, 1.25, 1.8),
+    axisLineStrokeWidth: clamp(minSide / 660, 1, 1.55),
+    gridStrokeWidth: clamp(minSide / 800, 0.8, 1.2),
+    tickLength: clamp(minSide / 100, 5, 8),
+    tickStrokeWidth: clamp(minSide / 720, 0.9, 1.35),
+  };
+}
+
+function applySvgZoom(svg: any, zoomLayer: any, width: number, height: number) {
+  const behavior = zoom()
+    .scaleExtent([1, 7])
+    .translateExtent([[-width * 0.55, -height * 0.55], [width * 1.55, height * 1.55]])
+    .extent([[0, 0], [width, height]])
+    .on("zoom", (event: any) => {
+      zoomLayer.attr("transform", event.transform.toString());
+    });
+
+  svg.call(behavior);
+  svg.on("dblclick.zoom", null);
+  svg
+    .style("cursor", "grab")
+    .on("pointerdown", () => svg.style("cursor", "grabbing"))
+    .on("pointerup pointerleave", () => svg.style("cursor", "grab"));
 }
 
 function makeLineString(value: number, axis: "lat" | "lon") {
@@ -423,11 +422,12 @@ function drawColorbar(
   colorScale: (value: number) => string,
   axisColor: string,
   mutedColor: string,
+  labelFontSize: number,
 ) {
-  const colorbarWidth = 280;
-  const colorbarHeight = 10;
+  const colorbarWidth = Math.round(clamp(width * 0.34, 210, 380));
+  const colorbarHeight = clamp(height / 72, 10, 15);
   const colorbarX = width / 2 - colorbarWidth / 2;
-  const colorbarY = height - 38;
+  const colorbarY = height - labelFontSize * 2.9;
   const [minLat, maxLat] = colorDomain;
   const defs = svg.append("defs");
   const gradient = defs.append("linearGradient").attr("id", gradientId).attr("x1", "0%").attr("x2", "100%");
@@ -448,25 +448,25 @@ function drawColorbar(
 
   svg.append("text")
     .attr("x", colorbarX)
-    .attr("y", colorbarY + 26)
+    .attr("y", colorbarY + labelFontSize * 2.05)
     .attr("text-anchor", "start")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text(`${minLat.toFixed(1)} deg`);
 
   svg.append("text")
     .attr("x", colorbarX + colorbarWidth / 2)
-    .attr("y", colorbarY - 8)
+    .attr("y", colorbarY - labelFontSize * 0.7)
     .attr("text-anchor", "middle")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text("Latitude");
 
   svg.append("text")
     .attr("x", colorbarX + colorbarWidth)
-    .attr("y", colorbarY + 26)
+    .attr("y", colorbarY + labelFontSize * 2.05)
     .attr("text-anchor", "end")
-    .attr("font-size", 11)
+    .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
     .text(`${maxLat.toFixed(1)} deg`);
 }
