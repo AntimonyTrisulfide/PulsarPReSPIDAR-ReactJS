@@ -13,11 +13,11 @@ import {
   QueueStatusSummary,
   type PlotRequestViewState,
 } from "./components/PlotLoadingState";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ChevronDown, Eye, EyeOff } from "lucide-react";
 import {
   DEFAULT_MEERTIME_NPZ_URL,
   POLARISATION_QUANTITIES,
@@ -35,6 +35,12 @@ import {
   type ObservationMetadata,
 } from "@/api/polarimetryApi";
 import { useThemePreference } from "@/hooks/useThemePreference";
+import {
+  persistDatasetBlob,
+  persistPlotSettings,
+  readPersistedDatasetBlob,
+  readPersistedPlotSettings,
+} from "@/lib/sessionCache";
 
 type PlotRequestKey = "profiles" | "heatmaps" | "aitoff" | "phaseSlices" | "polarHistograms" | "polarStacks" | "polarParams";
 type PlotRequestState = PlotRequestViewState & { version: number };
@@ -48,6 +54,7 @@ const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "aitoff", "
 const PLOT_REQUEST_DEBOUNCE_MS = 350;
 const PLOT_REQUEST_CONCURRENCY = getPositiveIntegerEnv(import.meta.env.VITE_PLOT_REQUEST_CONCURRENCY, 1);
 const PLOT_REQUEST_COOLDOWN_MS = getNonNegativeNumberEnv(import.meta.env.VITE_PLOT_REQUEST_COOLDOWN_MS, 550);
+const TEST_LOADING_DELAY_MS = 1800;
 const delay = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
 
 function getPositiveIntegerEnv(value: string | undefined, fallback: number) {
@@ -83,6 +90,7 @@ const App: React.FC = () => {
   const [url, setUrl] = useState<string>(DEFAULT_MEERTIME_NPZ_URL);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [poincareAitoffData, setPoincareAitoffData] = useState<any>(null);
   const [phaseHistogramData, setPhaseHistogramData] = useState<any>(null);
   const [polHistogramData, setPolHistogramData] = useState<Record<string, any> | null>(null);
@@ -130,6 +138,7 @@ const App: React.FC = () => {
   const [endPhaseProfiles, setEndPhaseProfiles] = useState(1.0);
   const [startPhaseHeatmaps, setStartPhaseHeatmaps] = useState(0.0);
   const [endPhaseHeatmaps, setEndPhaseHeatmaps] = useState(1.0);
+  const hasRestoredSessionRef = useRef(false);
 
   const isInvalidRange = isInvalidPhaseRange;
   const isPreparingInput = isLoadingRemoteFile || isPreparingBackendDataset;
@@ -257,6 +266,7 @@ const App: React.FC = () => {
   const prepareBackendDataset = async (incoming: File | Blob, onPulse: { start: number; end: number }) => {
     setIsPreparingBackendDataset(true);
     try {
+      await delay(TEST_LOADING_DELAY_MS);
       const prepared = await requestPrepareDataset(incoming, onPulse);
       return prepared.data_key;
     } catch (error) {
@@ -274,6 +284,7 @@ const App: React.FC = () => {
       const defaultOnPulse = { start: 0, end: 1 };
       const dataKey = await prepareBackendDataset(selectedFile, defaultOnPulse);
       applyNewFile(selectedFile, dataKey, defaultOnPulse);
+      void persistDatasetBlob(selectedFile);
     }
   };
 
@@ -306,6 +317,7 @@ const App: React.FC = () => {
     const defaultOnPulse = { start: 0, end: 1 };
     const dataKey = await prepareBackendDataset(droppedFile, defaultOnPulse);
     applyNewFile(droppedFile, dataKey, defaultOnPulse);
+    void persistDatasetBlob(droppedFile);
   };
   const fetchPoincareAitoffData = async () => {
     const source = getDatasetSource();
@@ -365,6 +377,7 @@ const App: React.FC = () => {
     }
     setIsLoadingRemoteFile(true);
     try {
+      await delay(TEST_LOADING_DELAY_MS);
       const remoteFile = await loadRemoteNpz(url, username, password);
       const { start, end, mid } = remoteFile.onPulse;
       const dataKey = await prepareBackendDataset(remoteFile.blob, { start, end });
@@ -388,6 +401,7 @@ const App: React.FC = () => {
       setEndPhasePolarParams(end);
       setOnPulseStartPolarParams(start);
       setOnPulseEndPolarParams(end);
+      void persistDatasetBlob(remoteFile.blob);
     } catch (err) {
       console.error("Error loading file:", err);
     } finally {
@@ -572,6 +586,99 @@ const App: React.FC = () => {
   };
   // Queue plot fetches so a modest backend is not hit by many large file posts at once.
   useEffect(() => {
+    if (hasRestoredSessionRef.current) return;
+    hasRestoredSessionRef.current = true;
+    const restoreSession = async () => {
+      const savedSettings = readPersistedPlotSettings();
+      if (savedSettings) {
+        setUrl(savedSettings.url || DEFAULT_MEERTIME_NPZ_URL);
+        setUsername(savedSettings.username || "");
+        setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
+        setDatasetOnPulse(savedSettings.datasetOnPulse);
+        setStartPhaseAitoff(savedSettings.startPhaseAitoff);
+        setEndPhaseAitoff(savedSettings.endPhaseAitoff);
+        setStartPhasePolHist(savedSettings.startPhasePolHist);
+        setEndPhasePolHist(savedSettings.endPhasePolHist);
+        setStartPhasePolStacks(savedSettings.startPhasePolStacks);
+        setEndPhasePolStacks(savedSettings.endPhasePolStacks);
+        setStartPhasePolarParams(savedSettings.startPhasePolarParams);
+        setEndPhasePolarParams(savedSettings.endPhasePolarParams);
+        setOnPulseStartPolarParams(savedSettings.onPulseStartPolarParams);
+        setOnPulseEndPolarParams(savedSettings.onPulseEndPolarParams);
+        setStartPhaseProfiles(savedSettings.startPhaseProfiles);
+        setEndPhaseProfiles(savedSettings.endPhaseProfiles);
+        setStartPhaseHeatmaps(savedSettings.startPhaseHeatmaps);
+        setEndPhaseHeatmaps(savedSettings.endPhaseHeatmaps);
+        setAitoffPhase(savedSettings.aitoffPhase);
+        setLeftPhaseHist(savedSettings.leftPhaseHist);
+        setMidPhaseHist(savedSettings.midPhaseHist);
+        setRightPhaseHist(savedSettings.rightPhaseHist);
+      }
+
+      const savedBlob = await readPersistedDatasetBlob();
+      if (!savedBlob) return;
+      const preparedKey = await prepareBackendDataset(savedBlob, savedSettings?.datasetOnPulse ?? { start: 0, end: 1 });
+      applyNewFile(savedBlob, preparedKey, savedSettings?.datasetOnPulse ?? { start: 0, end: 1 });
+      if (savedSettings) {
+        setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
+        setStartPhaseAitoff(savedSettings.startPhaseAitoff);
+        setEndPhaseAitoff(savedSettings.endPhaseAitoff);
+        setStartPhasePolHist(savedSettings.startPhasePolHist);
+        setEndPhasePolHist(savedSettings.endPhasePolHist);
+        setStartPhasePolStacks(savedSettings.startPhasePolStacks);
+        setEndPhasePolStacks(savedSettings.endPhasePolStacks);
+        setStartPhasePolarParams(savedSettings.startPhasePolarParams);
+        setEndPhasePolarParams(savedSettings.endPhasePolarParams);
+        setOnPulseStartPolarParams(savedSettings.onPulseStartPolarParams);
+        setOnPulseEndPolarParams(savedSettings.onPulseEndPolarParams);
+        setStartPhaseProfiles(savedSettings.startPhaseProfiles);
+        setEndPhaseProfiles(savedSettings.endPhaseProfiles);
+        setStartPhaseHeatmaps(savedSettings.startPhaseHeatmaps);
+        setEndPhaseHeatmaps(savedSettings.endPhaseHeatmaps);
+        setAitoffPhase(savedSettings.aitoffPhase);
+        setLeftPhaseHist(savedSettings.leftPhaseHist);
+        setMidPhaseHist(savedSettings.midPhaseHist);
+        setRightPhaseHist(savedSettings.rightPhaseHist);
+      }
+    };
+    void restoreSession();
+  }, []);
+
+  useEffect(() => {
+    if (!file) return;
+    persistPlotSettings({
+      url,
+      username,
+      obsMetadata,
+      datasetOnPulse,
+      startPhaseAitoff,
+      endPhaseAitoff,
+      startPhasePolHist,
+      endPhasePolHist,
+      startPhasePolStacks,
+      endPhasePolStacks,
+      startPhasePolarParams,
+      endPhasePolarParams,
+      onPulseStartPolarParams,
+      onPulseEndPolarParams,
+      startPhaseProfiles,
+      endPhaseProfiles,
+      startPhaseHeatmaps,
+      endPhaseHeatmaps,
+      aitoffPhase,
+      leftPhaseHist,
+      midPhaseHist,
+      rightPhaseHist,
+    });
+  }, [
+    file, url, username, obsMetadata, datasetOnPulse, startPhaseAitoff, endPhaseAitoff,
+    startPhasePolHist, endPhasePolHist, startPhasePolStacks, endPhasePolStacks,
+    startPhasePolarParams, endPhasePolarParams, onPulseStartPolarParams, onPulseEndPolarParams,
+    startPhaseProfiles, endPhaseProfiles, startPhaseHeatmaps, endPhaseHeatmaps,
+    aitoffPhase, leftPhaseHist, midPhaseHist, rightPhaseHist,
+  ]);
+
+  useEffect(() => {
     if (!file) return;
     if (isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams)) return;
     const t = window.setTimeout(
@@ -641,6 +748,7 @@ const App: React.FC = () => {
   const histogramsState = getCombinedPlotState("polarHistograms");
   const phaseSlicesState = getCombinedPlotState("phaseSlices");
   const aitoffState = getCombinedPlotState("aitoff");
+  const hasLoadedData = file !== null;
   const runningPlotCount = Object.values(plotRequestStates).filter(state => state.status === "running").length;
   const queuedPlotCount = Object.values(plotRequestStates).filter(state => state.status === "queued").length;
   const stacksRangeInvalid = isInvalidRange(startPhasePolStacks, endPhasePolStacks);
@@ -657,24 +765,35 @@ const App: React.FC = () => {
           setCatalogueModalOpen(false);
         }}
       />
-      <header className="max-w-7xl mx-auto w-full px-5 sm:px-8 pt-8 pb-4 flex flex-col gap-3">
+      <header className="page-hero max-w-[1600px] mx-auto w-full px-8 sm:px-10 xl:px-12 pt-8 pb-4 flex flex-col gap-3">
         <div className="w-full flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0 flex-1">
-            <h1 className="text-3xl font-bold text-foreground leading-tight">Pulsar-PReSPIDAR</h1>
-            <p className="text-sm mt-1 font-semibold text-muted-foreground">
+            <h1 className="page-title font-bold text-foreground">Pulsar-PReSPIDAR</h1>
+            <p className="page-subtitle mt-1 font-semibold text-foreground">
               Pulsar-Polarisation REsolved Single Pulse Interactive Data AnalyseR
             </p>
           </div>
           <div className="flex flex-wrap gap-2 md:ml-4">
-            <Button variant="outline" onClick={() => setCatalogueModalOpen(true)}>
+            {/* <Button variant="outline" onClick={() => setCatalogueModalOpen(true)}>
               Browse Catalogue
-            </Button>
-            <Button variant="outline" onClick={() => setIsDark(d => !d)}>
-              {isDark ? "Light Mode" : "Dark Mode"}
-            </Button>
+            </Button> */}
+            <button
+              type="button"
+              onClick={() => setIsDark(d => !d)}
+              className={`theme-orbit-toggle ${isDark ? "is-dark" : "is-light"}`}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              <span className="theme-orbit-track" aria-hidden="true">
+                <span className="theme-orbit-core theme-pulsar-core">
+                  <span className="theme-pulsar-star" />
+                  <span className="theme-pulsar-beam theme-pulsar-beam-a" />
+                </span>
+              </span>
+            </button>
           </div>
         </div>
-        <div className="text-center text-base text-muted-foreground mb-2">
+        <div className="page-intro text-left text-foreground mb-2">
           An open-source data-analysis tool for visualizing and exploring single-pulse polarimetry data from the
           <a
             href="https://psrweb.jb.man.ac.uk/meertime/singlepulse/"
@@ -685,28 +804,31 @@ const App: React.FC = () => {
             MeerTime Single Pulse Database
           </a>.
         </div>
-        <Collapsible>
+        <Collapsible className="details-collapsible">
           <CollapsibleTrigger asChild>
-            <Button variant="outline" className="mx-auto block">Details</Button>
+            <button type="button" className="details-trigger mx-auto">
+              <span>Details</span>
+              <ChevronDown className="details-trigger-icon h-4 w-4" />
+            </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+            <div className="details-body mt-4 space-y-3 text-foreground">
               <div><b>Default MeerTime Link:</b></div>
               <div className="break-all bg-card p-2 rounded text-foreground">
                 https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz
               </div>
               <div className="space-y-2 leading-relaxed">
-                <div className="text-foreground font-semibold">What this tool does</div>
-                <p className="text-sm">
+                <div className="details-heading text-foreground">What this tool does</div>
+                <p>
                   This tool lets you upload pulsar single-pulse data in .npy or .npz format (as available from the MeerTime database), and generates a series of interactive visualizations to explore the polarization state of the pulsar signal.
                 </p>
-                <div className="text-foreground font-semibold">Features (as of January 02, 2026)</div>
+                <div className="details-heading text-foreground">Features (as of January 02, 2026)</div>
                 <ul className="list-disc list-inside space-y-1">
                   <li>Waterfall plots and integrated profiles of each Stokes parameter.</li>
                   <li>Individual pulse profiles for selected pulse indices.</li>
                   <li>Polarization parameter vs pulse phase integrated over all pulses.</li>
                   <li>Pulse stacks of polarization parameters.</li>
-                  <li>2|EA| v/s P/I plot (Oswald et al., 2023) for partial coherence model checks.</li>
+                  <li><a href="https://ui.adsabs.harvard.edu/abs/2023MNRAS.524.5558O/abstract" target="_blank" rel="noopener noreferrer" className="underline text-accent">Oswald et al. (2023)</a> 2|EA| v/s P/I plot for partial coherence model checks.</li>
                   <li>2D histograms of polarization parameters with 1D histograms for specific phases.</li>
                   <li>Trajectories of polarization state on the Poincare sphere (Aitoff and 3D) for integrated and individual subpulses.</li>
                   <li>Polarization states on the Poincare sphere at a fixed phase for all pulses (inspect O/X mode clustering).</li>
@@ -715,90 +837,133 @@ const App: React.FC = () => {
                   <li>For uploaded numpy files, on-pulse window is inferred from noise floor as a fraction of peak integrated intensity (user input).</li>
                   <li>For data fetched from MeerTime URL, on-pulse is inferred automatically.</li>
                 </ul>
-                <div className="text-foreground font-semibold">Abbreviations</div>
+                <div className="details-heading text-foreground">Abbreviations</div>
                 <ul className="list-disc list-inside space-y-1">
                   <li>I, Q, U, V are the four Stokes parameters.</li>
                   <li>PA is polarisation angle; EA is ellipticity angle.</li>
                   <li>L is linear polarisation; P is total polarisation; lowercase l and p are fractional counterparts.</li>
                 </ul>
-                <div className="text-foreground font-semibold">Contact</div>
+                <div className="details-heading text-foreground">Contact</div>
                 <p>Need help or suggestions? Reach out to <a href="mailto:pmarmat@ph.iitr.ac.in" className="underline text-accent">Piyush Marmat</a>.</p>
               </div>
             </div>
           </CollapsibleContent>
         </Collapsible>
       </header>
-      <div className="max-w-7xl mx-auto w-full p-5 sm:p-8 flex flex-col gap-8">
-        {/* Upload: full width first */}
-        <div>
-          <Card className="card-surface border-0 shadow-xl">
-            <CardHeader>
-              <CardTitle className="text-card-foreground">Upload Data</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col gap-2">
-                <Label className="text-muted-foreground">Choose file</Label>
-                <div
-                  onClick={handleBrowseClick}
-                  onDragOver={handleDragOver}
-                  onDragEnter={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  className={`mt-1 flex flex-col items-center justify-center rounded-md border border-dashed px-4 py-6 text-sm transition-colors cursor-pointer ${isDragActive ? "border-ring bg-primary/5 text-foreground" : "border-border/70 bg-input/40 text-muted-foreground"}`}
-                >
-                  <span className="font-semibold text-foreground">Click or drag a .npz file</span>
-                  <span className="text-xs text-muted-foreground mt-1">Only .npz is accepted</span>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".npz"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </div>
-                <div className="text-center text-muted-foreground">or</div>
-                <Label className="text-muted-foreground">File URL</Label>
-                <Input type="text" placeholder="File URL" value={url} onChange={e => setUrl(e.target.value)} />
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <div>
-                    <Label className="text-muted-foreground">Username</Label>
-                    <Input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+      <main className="page-shell max-w-[1600px] mx-auto w-full px-8 pb-14 pt-4 sm:px-10 xl:px-12 flex flex-col gap-8">
+        <section className="upload-stage">
+          <div className="section-heading-row mb-5">
+            <h2 className="section-title">Load Data</h2>
+          </div>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="flex flex-col gap-2">
+                  <Label className="form-label text-foreground">Upload file</Label>
+                  <div
+                    onClick={handleBrowseClick}
+                    onDragOver={handleDragOver}
+                    onDragEnter={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    className={`upload-dropzone mt-1 ${isDragActive ? "is-drag-active" : ""}`}
+                  >
+                    <div className={`upload-mascot ${isDragActive ? "is-excited" : ""}`} aria-hidden="true">
+                      <div className="upload-mascot-ears">
+                        <span />
+                        <span />
+                      </div>
+                      <div className="upload-mascot-head">
+                        <span className="upload-mascot-eye upload-mascot-eye-left" />
+                        <span className="upload-mascot-eye upload-mascot-eye-right" />
+                        <span className="upload-mascot-mouth" />
+                      </div>
+                      <div className="upload-mascot-arms">
+                        <span className="upload-mascot-arm upload-mascot-arm-left" />
+                        <span className="upload-mascot-arm upload-mascot-arm-right" />
+                      </div>
+                    </div>
+                    <div className="upload-dropzone-copy">
+                      <span className="font-semibold text-foreground">
+                        {isDragActive ? "Drop your .npz file here" : "Click or drag a .npz file"}
+                      </span>
+                      <span className="form-help mt-2 text-foreground/80">
+                        {isPreparingInput
+                          ? "Loading data into the analysis pipeline..."
+                          : isDragActive
+                            ? "Our catcher is ready."
+                            : "Only `.npz` is accepted"}
+                      </span>
+                    </div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".npz"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
                   </div>
-                  <div>
-                    <Label className="text-muted-foreground">Password</Label>
-                    <Input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-                  </div>
                 </div>
-                <div className="flex justify-end gap-2">
-                  <Button onClick={handleLoadFromUrl} variant="outline" disabled={isPreparingInput}>
-                    {isLoadingRemoteFile
-                      ? "Loading file..."
-                      : isPreparingBackendDataset
-                        ? "Preparing backend cache..."
-                        : "Load from URL"}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
 
-        {/* Plots */}
-        <div className="w-full">
-          <div className="flex-1">
-            <Card className="card-surface border-0 shadow-2xl h-full flex flex-col">
-              <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <CardTitle className="text-card-foreground">Plots</CardTitle>
-                <QueueStatusSummary
-                  concurrency={PLOT_REQUEST_CONCURRENCY}
-                  queuedCount={queuedPlotCount}
-                  runningCount={runningPlotCount}
-                />
-              </CardHeader>
-              <CardContent className="flex-1 flex flex-col">
-                <div className="space-y-14">
-                  {/* Polarisation parameters + Poincare dual view */}
-                  <section className="scientific-section">
+                <div className="flex flex-col gap-5">
+                  <div className="flex flex-col gap-2">
+                    <Label className="form-label text-foreground">File URL</Label>
+                    <Input className="field-shell" type="text" placeholder="File URL" value={url} onChange={e => setUrl(e.target.value)} />
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <Label className="form-label text-foreground">Username</Label>
+                      <Input className="field-shell" type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label className="form-label text-foreground">Password</Label>
+                      <div className="relative">
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="Password"
+                          value={password}
+                          onChange={e => setPassword(e.target.value)}
+                          className="field-shell pr-12"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(current => !current)}
+                          className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-foreground hover:bg-muted"
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          title={showPassword ? "Hide password" : "Show password"}
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button onClick={handleLoadFromUrl} variant="outline" disabled={isPreparingInput} className="load-action-button hover:text-foreground">
+                      {isLoadingRemoteFile
+                        ? "Loading file..."
+                        : isPreparingBackendDataset
+                          ? "Preparing backend cache..."
+                          : "Load from URL"}
+                    </Button>
+                  </div>
+                </div>
+          </div>
+        </section>
+
+        {hasLoadedData && (
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="section-title">Plots</h2>
+              <QueueStatusSummary
+                concurrency={PLOT_REQUEST_CONCURRENCY}
+                queuedCount={queuedPlotCount}
+                runningCount={runningPlotCount}
+              />
+            </div>
+
+            <div className="space-y-8">
+              {/* Polarisation parameters + Poincare dual view */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Polarisation parameters, Poincare view, and custom plots</h2>
                       <PlotStatusBadge state={polarParamsState} />
@@ -811,7 +976,7 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-2 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">On-pulse start / start phase</Label>
+                        <Label className="form-label text-muted-foreground">On-pulse start / start phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -827,7 +992,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">On-pulse end / end phase</Label>
+                        <Label className="form-label text-muted-foreground">On-pulse end / end phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -844,7 +1009,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams) && (
-                      <div className="text-sm text-red-600 mt-1">Ensure start &lt;= end for the on-pulse window.</div>
+                      <div className="validation-note text-red-600 mt-1">Ensure start &lt;= end for the on-pulse window.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={polarParamsState} label="Polarisation parameters" hasData={!!polarParamsData?.dataset?.length}>
@@ -876,10 +1041,10 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
+              </section>
 
-                  {/* Profiles + Heatmaps (integrated) */}
-                  <section className="scientific-section">
+              {/* Profiles + Heatmaps (integrated) */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Waterfall profiles and integrated heatmaps</h2>
                       <PlotStatusBadge state={profilesState} />
@@ -892,7 +1057,7 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-2 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">Start Phase</Label>
+                        <Label className="form-label text-muted-foreground">Start Phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -904,7 +1069,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">End Phase</Label>
+                        <Label className="form-label text-muted-foreground">End Phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -917,7 +1082,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhaseProfiles, endPhaseProfiles) && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
+                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={profilesState} label="Waterfall profiles and heatmaps" hasData={!!profilesData}>
@@ -934,10 +1099,10 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
+              </section>
 
-                  {/* Polarisation stacks */}
-                  <section className="scientific-section">
+              {/* Polarisation stacks */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Polarisation stacks</h2>
                       <PlotStatusBadge state={stacksState} />
@@ -950,7 +1115,7 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-2 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">Start phase</Label>
+                        <Label className="form-label text-muted-foreground">Start phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -965,7 +1130,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">End phase</Label>
+                        <Label className="form-label text-muted-foreground">End phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -981,7 +1146,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {stacksRangeInvalid && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
+                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={stacksState} label="Polarisation stacks" hasData={!!polStacksData}>
@@ -992,10 +1157,10 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
+              </section>
 
-                  {/* Polarisation histograms (2D) */}
-                  <section className="scientific-section">
+              {/* Polarisation histograms (2D) */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Phase-resolved polarisation histograms</h2>
                       <PlotStatusBadge state={histogramsState} />
@@ -1008,7 +1173,7 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-2 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">Start phase</Label>
+                        <Label className="form-label text-muted-foreground">Start phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1023,7 +1188,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">End phase</Label>
+                        <Label className="form-label text-muted-foreground">End phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1039,15 +1204,15 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {histogramsRangeInvalid && (
-                      <div className="text-sm text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
+                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={histogramsState} label="Phase-resolved polarisation histograms" hasData={!!polHistogramData}>
                         <ErrorBoundary>
                           {polHistogramData && (
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
                               {POLARISATION_QUANTITIES.map(q => (
-                                <div key={q} className="border border-border/50 rounded-lg">
+                                <div key={q}>
                                   <SinglePolarisationHistogram data={polHistogramData[q]} isDark={isDark} />
                                 </div>
                               ))}
@@ -1056,10 +1221,10 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
+              </section>
 
-                  {/* Phase-slice histograms section */}
-                  <section className="scientific-section">
+              {/* Phase-slice histograms section */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Phase-slice histograms</h2>
                       <PlotStatusBadge state={phaseSlicesState} />
@@ -1072,7 +1237,7 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-3 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">Left phase</Label>
+                        <Label className="form-label text-muted-foreground">Left phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1087,7 +1252,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">Mid phase</Label>
+                        <Label className="form-label text-muted-foreground">Mid phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1102,7 +1267,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">Right phase</Label>
+                        <Label className="form-label text-muted-foreground">Right phase</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1118,7 +1283,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {phaseSlicesRangeInvalid && (
-                      <div className="text-sm text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
+                      <div className="validation-note text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={phaseSlicesState} label="Phase-slice histograms" hasData={!!phaseHistogramData}>
@@ -1133,10 +1298,10 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
+              </section>
 
-                  {/* Poincare Aitoff section */}
-                  <section className="scientific-section">
+              {/* Poincare Aitoff section */}
+              <section className="scientific-section section-plain">
                     <div className="section-heading-row">
                       <h2 className="section-title">Fixed-phase Poincare sphere</h2>
                       <PlotStatusBadge state={aitoffState} />
@@ -1149,11 +1314,11 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-3 gap-2 items-end mt-2">
                       <div>
-                        <Label className="text-muted-foreground">Phase value</Label>
+                        <Label className="form-label text-muted-foreground">Phase value</Label>
                         <Input type="number" min={0} max={1} step={0.001} value={aitoffPhase} onChange={e => setAitoffPhase(Number(e.target.value))} />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">On-pulse start</Label>
+                        <Label className="form-label text-muted-foreground">On-pulse start</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1165,7 +1330,7 @@ const App: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <Label className="text-muted-foreground">On-pulse end</Label>
+                        <Label className="form-label text-muted-foreground">On-pulse end</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1178,7 +1343,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isInvalidRange(startPhaseAitoff, endPhaseAitoff) && (
-                      <div className="text-sm text-red-600 mt-1">On-pulse start must be &lt;= end.</div>
+                      <div className="validation-note text-red-600 mt-1">On-pulse start must be &lt;= end.</div>
                     )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!poincareAitoffData}>
@@ -1189,13 +1354,11 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
-                  </section>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
+              </section>
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 };

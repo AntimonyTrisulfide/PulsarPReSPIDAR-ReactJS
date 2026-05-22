@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, useId, type CSSProperties } from "react";
 import Plot from "react-plotly.js";
-import { geoGraticule, geoPath, scaleLinear, select, zoom } from "d3";
+import { geoGraticule, geoPath, scaleLinear, select } from "d3";
 import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
+import { Button } from "@/components/ui/button";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { lockCartesianInteractions, paperPlotConfig, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { PLOT_AXIS_TITLE_SIZE, PLOT_TICK_FONT_SIZE, plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 import { downloadSvgFromScope } from "@/shared/plot/svgExport";
 import { useElementSize } from "@/shared/plot/useElementSize";
 
@@ -17,6 +19,7 @@ interface CustomXYPlotProps {
   yData: number[];
   xLabel: string;
   yLabel: string;
+  viewMode: LinearViewMode;
   isDark: boolean;
   axisColor: string;
   gridColor: string;
@@ -24,19 +27,45 @@ interface CustomXYPlotProps {
   plotBg: string;
 }
 
+type LinearViewMode = "plot" | "table";
+
+type LinearDataRow = {
+  index: number;
+  x: number;
+  y: number;
+};
+
+type FractionSeriesKey = "p_frac" | "l_frac" | "v_frac" | "absv_frac" | "PA" | "EA";
+
+function isPlotTrace<T>(value: T | null): value is T {
+  return value !== null;
+}
+
 const CustomXYPlot = memo(function CustomXYPlot({
   xData,
   yData,
   xLabel,
   yLabel,
+  viewMode,
   isDark,
   axisColor,
   gridColor,
   paperBg,
   plotBg,
 }: CustomXYPlotProps) {
-  // Reuse length calculation
-  const dataLength = useMemo(() => Math.min(xData.length, yData.length), [xData.length, yData.length]);
+  const rows = useMemo<LinearDataRow[]>(() => {
+    const count = Math.min(xData.length, yData.length);
+    const next: LinearDataRow[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const x = xData[index];
+      const y = yData[index];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      next.push({ index, x, y });
+    }
+    return next;
+  }, [xData, yData]);
+
+  const dataLength = rows.length;
   
   const trace = useMemo(() => {
     if (dataLength === 0) return null;
@@ -44,14 +73,14 @@ const CustomXYPlot = memo(function CustomXYPlot({
     return {
       type: "scatter" as const,
       mode: "lines" as const,
-      x: xData.slice(0, dataLength),
-      y: yData.slice(0, dataLength),
+      x: rows.map(row => row.x),
+      y: rows.map(row => row.y),
       line: { color: isDark ? "#60a5fa" : "#2563eb", width: 2 },
-      hovertemplate: `x %{x:.4f}<br>y %{y:.4f}<extra></extra>`,
+      hovertemplate: `${xLabel} %{x:.4f}<br>${yLabel} %{y:.4f}<extra></extra>`,
       name: "Trajectory",
       showlegend: false,
     };
-  }, [xData, yData, dataLength, isDark]);
+  }, [dataLength, isDark, rows, xLabel, yLabel]);
 
   const layout = useMemo(() => {
     const arrowColor = isDark ? "#60a5fa" : "#2563eb";
@@ -61,10 +90,10 @@ const CustomXYPlot = memo(function CustomXYPlot({
     if (dataLength > 1) {
       const arrowStep = Math.max(1, Math.ceil(dataLength / 48));
       for (let i = 0; i < dataLength - 1; i += arrowStep) {
-        const x0 = xData[i];
-        const y0 = yData[i];
-        const x1 = xData[i + 1];
-        const y1 = yData[i + 1];
+        const x0 = rows[i]?.x;
+        const y0 = rows[i]?.y;
+        const x1 = rows[i + 1]?.x;
+        const y1 = rows[i + 1]?.y;
         
         if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) continue;
         
@@ -92,16 +121,15 @@ const CustomXYPlot = memo(function CustomXYPlot({
       }
     }
     
-    return {
+    return lockCartesianInteractions({
       title: undefined,
       xaxis: {
         title: { text: xLabel, standoff: 8 },
         gridcolor: gridColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside" as const,
         ticklen: 4,
-        titlefont: { color: axisColor },
         showline: true,
         mirror: "allticks" as const,
         automargin: true,
@@ -109,11 +137,10 @@ const CustomXYPlot = memo(function CustomXYPlot({
       yaxis: {
         title: { text: yLabel, standoff: 10 },
         gridcolor: gridColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside" as const,
         ticklen: 4,
-        titlefont: { color: axisColor },
         showline: true,
         mirror: "allticks" as const,
         automargin: true,
@@ -122,11 +149,11 @@ const CustomXYPlot = memo(function CustomXYPlot({
       margin: { l: 50, r: 20, t: 45, b: 50 },
       paper_bgcolor: paperBg,
       plot_bgcolor: plotBg,
-      font: { color: axisColor },
-    } as const;
-  }, [xLabel, yLabel, xData, yData, dataLength, isDark, axisColor, gridColor, paperBg, plotBg]);
+      font: plotFont(axisColor),
+    } as const);
+  }, [xLabel, yLabel, rows, dataLength, isDark, axisColor, gridColor, paperBg, plotBg]);
 
-  if (!trace || dataLength === 0) {
+  if (dataLength === 0) {
     return (
       <div className="h-full w-full rounded-md border border-dashed border-border/70 text-sm text-muted-foreground flex items-center justify-center">
         No overlapping samples for the selected axes.
@@ -134,9 +161,36 @@ const CustomXYPlot = memo(function CustomXYPlot({
     );
   }
 
+  if (viewMode === "table") {
+    return (
+      <div className="h-full w-full overflow-hidden rounded-md border border-border/60 bg-transparent">
+        <div className="max-h-full overflow-auto">
+          <table className="w-full min-w-[420px] border-collapse text-sm">
+            <thead className="sticky top-0 z-10 bg-transparent backdrop-blur-sm">
+              <tr className="border-b border-border/70 text-left">
+                <th className="px-3 py-2 font-semibold text-muted-foreground">#</th>
+                <th className="px-3 py-2 font-semibold text-foreground">{xLabel}</th>
+                <th className="px-3 py-2 font-semibold text-foreground">{yLabel}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={`${row.index}-${row.x}-${row.y}`} className="border-b border-border/40">
+                  <td className="px-3 py-2 text-muted-foreground">{row.index + 1}</td>
+                  <td className="px-3 py-2 font-mono text-foreground">{row.x.toFixed(6)}</td>
+                  <td className="px-3 py-2 font-mono text-foreground">{row.y.toFixed(6)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <MemoizedPlot
-      data={[trace]}
+      data={trace ? [trace] : []}
       layout={layout}
       config={paperPlotConfig("custom-polarisation-xy")}
       useResizeHandler
@@ -160,7 +214,6 @@ type DualAitoffProjectionProps = {
 const aitoffLatLabelValues = [-60, -30, 0, 30, 60];
 const aitoffLonLabelValues = [-135, -90, -45, 0, 45, 90, 135];
 const DUAL_AITOFF_PNG_EXPORT_SCALE = 4;
-
 const DualAitoffProjection = memo(function DualAitoffProjection({
   points,
   startPhase,
@@ -217,8 +270,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       { type: "Sphere" },
     );
     const path = geoPath(projection);
-    const zoomLayer = svg.append("g").attr("class", "dual-aitoff-zoom-layer");
-    const g = zoomLayer.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
     g.append("path")
       .datum({ type: "Sphere" })
@@ -317,8 +369,24 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lon: number) => `${lon} deg`);
 
+    svg.append("text")
+      .attr("x", width / 2)
+      .attr("y", height - labelFontSize * 0.15)
+      .attr("text-anchor", "middle")
+      .attr("font-size", Math.max(12, labelFontSize - 1))
+      .attr("font-weight", 700)
+      .attr("fill", axisColor)
+      .text("Longitude (2PA)");
+
+    svg.append("text")
+      .attr("transform", `translate(${Math.max(16, margin.left * 0.24)}, ${margin.top + innerHeight / 2}) rotate(-90)`)
+      .attr("text-anchor", "middle")
+      .attr("font-size", Math.max(12, labelFontSize - 1))
+      .attr("font-weight", 700)
+      .attr("fill", axisColor)
+      .text("Latitude (2EA)");
+
     drawDualAitoffColorbar(svg, width, height, gradientId, startPhase, endPhase, phaseScale, axisColor, mutedColor, labelFontSize);
-    applySvgZoom(svg, zoomLayer, width, height);
   }, [axisColor, bgColor, endPhase, fullscreen, gradientId, gridColor, mutedColor, phaseScale, points, size, startPhase]);
 
   return <div ref={containerRef} className={className} />;
@@ -354,6 +422,15 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   const [mode, setMode] = useState<"aitoff" | "3d">("aitoff");
   const [split, setSplit] = useState(50);
   const [fullscreen, setFullscreen] = useState<null | "left" | "right" | "custom">(null);
+  const [customXYViewMode, setCustomXYViewMode] = useState<LinearViewMode>("plot");
+  const [visibleSeries, setVisibleSeries] = useState<Record<FractionSeriesKey, boolean>>({
+    p_frac: true,
+    l_frac: true,
+    v_frac: true,
+    absv_frac: true,
+    PA: true,
+    EA: true,
+  });
   const [xAxisKey, setXAxisKey] = useState<AxisKey>("phase");
   const [yAxisKey, setYAxisKey] = useState<AxisKey>("p_frac");
   const [, startTransition] = useTransition();
@@ -370,9 +447,9 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
 
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#e5e7eb" : "#111827";
-  const gridColor = themeIsDark ? "#1f2937" : "#e5e7eb";
-  const paperBg = themeIsDark ? "#0b1220" : "#ffffff";
-  const plotBg = themeIsDark ? "#0b1220" : "#ffffff";
+  const gridColor = themeIsDark ? "#90a4c8" : "#475569";
+  const paperBg = themeIsDark ? "#080808" : "#f7fafc";
+  const plotBg = themeIsDark ? "#080808" : "#f7fafc";
   const activeToggleClass = themeIsDark ? "bg-white/15 text-white" : "bg-gray-900 text-white";
   const inactiveToggleClass = themeIsDark ? "text-gray-200 hover:bg-white/5" : "text-gray-800 hover:bg-black/5";
 
@@ -441,7 +518,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
         ticktext: [startPhase.toFixed(2), endPhase.toFixed(2)],
       },
     },
-    hovertemplate: "x %{x:.2f}<br>y %{y:.2f}<br>z %{z:.2f}<extra></extra>",
+    hovertemplate: "Q %{x:.2f}<br>U %{y:.2f}<br>V %{z:.2f}<extra></extra>",
     name: "Poincare points",
   }), [data.x, data.y, data.z, startPhase, endPhase, markerColors]);
 
@@ -449,16 +526,17 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     title: undefined,
     dragmode: "orbit" as const,
     scene: {
-      xaxis: { title: { text: "X" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
-      yaxis: { title: { text: "Y" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
-      zaxis: { title: { text: "Z" }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, titlefont: { color: axisColor }, showline: true },
+      xaxis: { title: { text: "Q", font: { color: axisColor, size: PLOT_AXIS_TITLE_SIZE } }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor, size: PLOT_TICK_FONT_SIZE }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, showline: true, showbackground: true, backgroundcolor: themeIsDark ? "#080808" : "#f7fafc" },
+      yaxis: { title: { text: "U", font: { color: axisColor, size: PLOT_AXIS_TITLE_SIZE } }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor, size: PLOT_TICK_FONT_SIZE }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, showline: true, showbackground: true, backgroundcolor: themeIsDark ? "#080808" : "#f7fafc" },
+      zaxis: { title: { text: "V", font: { color: axisColor, size: PLOT_AXIS_TITLE_SIZE } }, range: [-1, 1], gridcolor: gridColor, zerolinecolor: gridColor, linecolor: axisColor, tickfont: { color: axisColor, size: PLOT_TICK_FONT_SIZE }, tickcolor: axisColor, ticks: "outside" as const, ticklen: 4, showline: true, showbackground: true, backgroundcolor: themeIsDark ? "#080808" : "#f7fafc" },
       aspectmode: "cube" as const,
+      bgcolor: plotBg,
     },
     margin: { l: 0, r: 0, t: 50, b: 50 },
     paper_bgcolor: paperBg,
     plot_bgcolor: plotBg,
-    font: { color: axisColor },
-  }), [axisColor, gridColor, paperBg, plotBg]);
+    font: plotFont(axisColor),
+  }), [axisColor, gridColor, paperBg, plotBg, themeIsDark]);
 
   useEffect(() => {
     const summarize = (arr: number[]) => {
@@ -491,16 +569,16 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   }, [data]);
 
   const fractionTraces = useMemo(() => ([
-    { x: phaseAxis, y: data.p_frac, type: "scatter" as const, mode: "markers" as const, name: "P/I", line: { color: "#0ea5e9" } },
-    { x: phaseAxis, y: data.l_frac, type: "scatter" as const, mode: "markers" as const, name: "L/I", line: { color: "#22c55e" } },
-    { x: phaseAxis, y: data.v_frac, type: "scatter" as const, mode: "markers" as const, name: "V/I", line: { color: "#f97316" } },
-    { x: phaseAxis, y: data.absv_frac, type: "scatter" as const, mode: "markers" as const, name: "|V/I|", line: { color: "#a855f7", dash: "dash" as const } },
-  ]), [data.absv_frac, data.l_frac, data.p_frac, data.v_frac, phaseAxis]);
+    visibleSeries.p_frac ? { x: phaseAxis, y: data.p_frac, type: "scatter" as const, mode: "markers" as const, name: "P/I", line: { color: "#0ea5e9" } } : null,
+    visibleSeries.l_frac ? { x: phaseAxis, y: data.l_frac, type: "scatter" as const, mode: "markers" as const, name: "L/I", line: { color: "#22c55e" } } : null,
+    visibleSeries.v_frac ? { x: phaseAxis, y: data.v_frac, type: "scatter" as const, mode: "markers" as const, name: "V/I", line: { color: "#f97316" } } : null,
+    visibleSeries.absv_frac ? { x: phaseAxis, y: data.absv_frac, type: "scatter" as const, mode: "markers" as const, name: "|V/I|", line: { color: "#a855f7", dash: "dash" as const } } : null,
+  ].filter(isPlotTrace)), [data.absv_frac, data.l_frac, data.p_frac, data.v_frac, phaseAxis, visibleSeries]);
 
   const angleTraces = useMemo(() => ([
-    { x: phaseAxis, y: data.PA, type: "scatter" as const, mode: "markers" as const, name: "PA (deg)", line: { color: "#2563eb" }, xaxis: "x2", yaxis: "y2" },
-    { x: phaseAxis, y: data.EA, type: "scatter" as const, mode: "markers" as const, name: "EA (deg)", line: { color: "#dc2626" }, xaxis: "x2", yaxis: "y2" },
-  ]), [data.EA, data.PA, phaseAxis]);
+    visibleSeries.PA ? { x: phaseAxis, y: data.PA, type: "scatter" as const, mode: "markers" as const, name: "PA (deg)", line: { color: "#2563eb" }, xaxis: "x2", yaxis: "y2" } : null,
+    visibleSeries.EA ? { x: phaseAxis, y: data.EA, type: "scatter" as const, mode: "markers" as const, name: "EA (deg)", line: { color: "#dc2626" }, xaxis: "x2", yaxis: "y2" } : null,
+  ].filter(isPlotTrace)), [data.EA, data.PA, phaseAxis, visibleSeries]);
 
   const absPA = useMemo(() => (data.PA ?? []).map(v => Math.abs(v)), [data.PA]);
   const absEA = useMemo(() => (data.EA ?? []).map(v => Math.abs(v)), [data.EA]);
@@ -557,18 +635,51 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     [axisOptions, yAxisKey]
   );
 
-  const fractionsLayout = useMemo(() => ({
+  const customXYRows = useMemo(() => {
+    const count = Math.min(selectedXData.length, selectedYData.length);
+    const next: Array<{ x: number; y: number }> = [];
+    for (let index = 0; index < count; index += 1) {
+      const x = selectedXData[index];
+      const y = selectedYData[index];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      next.push({ x, y });
+    }
+    return next;
+  }, [selectedXData, selectedYData]);
+
+  const exportCustomXYCsv = useCallback(() => {
+    if (!customXYRows.length) return;
+    const escapeCsv = (value: string) => {
+      const normalized = value.replace(/"/g, "\"\"");
+      return /[",\n]/.test(normalized) ? `"${normalized}"` : normalized;
+    };
+    const lines = [
+      `${escapeCsv(xAxisLabel)},${escapeCsv(yAxisLabel)}`,
+      ...customXYRows.map(row => `${row.x},${row.y}`),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    const href = URL.createObjectURL(blob);
+    const filename = `${xAxisLabel}-vs-${yAxisLabel}`.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "custom-polarisation-xy";
+    link.href = href;
+    link.download = `${filename}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 0);
+  }, [customXYRows, xAxisLabel, yAxisLabel]);
+
+  const fractionsLayout = useMemo(() => lockCartesianInteractions({
     title: undefined,
     grid: { rows: 2, columns: 1, pattern: "independent" as const },
     xaxis: {
       title: { text: "Phase", standoff: 8 },
       showgrid: true,
       gridcolor: gridColor,
-      tickfont: { color: axisColor },
+      ...plotAxisText(axisColor),
       tickcolor: axisColor,
       ticks: "outside" as const,
       ticklen: 4,
-      titlefont: { color: axisColor },
       showline: true,
       mirror: "allticks" as const,
       automargin: true,
@@ -577,11 +688,10 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
       title: { text: "Fraction", standoff: 10 },
       range: [-0.2, 1.2],
       gridcolor: gridColor,
-      tickfont: { color: axisColor },
+      ...plotAxisText(axisColor),
       tickcolor: axisColor,
       ticks: "outside" as const,
       ticklen: 4,
-      titlefont: { color: axisColor },
       showline: true,
       mirror: "allticks" as const,
       automargin: true,
@@ -590,11 +700,10 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
       title: { text: "Phase", standoff: 8 },
       showgrid: true,
       gridcolor: gridColor,
-      tickfont: { color: axisColor },
+      ...plotAxisText(axisColor),
       tickcolor: axisColor,
       ticks: "outside" as const,
       ticklen: 4,
-      titlefont: { color: axisColor },
       showline: true,
       mirror: "allticks" as const,
       automargin: true,
@@ -602,20 +711,19 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     yaxis2: {
       title: { text: "Value", standoff: 10 },
       gridcolor: gridColor,
-      tickfont: { color: axisColor },
+      ...plotAxisText(axisColor),
       tickcolor: axisColor,
       ticks: "outside" as const,
       ticklen: 4,
-      titlefont: { color: axisColor },
       showline: true,
       mirror: "allticks" as const,
       automargin: true,
     },
     margin: { l: 50, r: 20, t: 50, b: 70 },
-    legend: { orientation: "h" as const, y: -0.2 },
+    showlegend: false,
     paper_bgcolor: paperBg,
     plot_bgcolor: plotBg,
-    font: { color: axisColor },
+    font: plotFont(axisColor),
     height: undefined,
   }), [axisColor, gridColor, paperBg, plotBg]);
 
@@ -629,6 +737,10 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     startTransition(() => {
       setYAxisKey(key);
     });
+  }, []);
+
+  const toggleSeries = useCallback((key: FractionSeriesKey) => {
+    setVisibleSeries(current => ({ ...current, [key]: !current[key] }));
   }, []);
 
   const exportDualAitoff = useCallback((format: PlotExportFormat, source: "inline" | "fullscreen" = "inline") => {
@@ -714,10 +826,10 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
         <div className="plot-toolbar">
           <FullscreenIconButton onClick={() => setFullscreen("left")} title="Fullscreen left" />
           <PlotExportButtons
-            filename="poincare-dual-view"
+            filename={mode === "aitoff" ? "poincare-dual-aitoff" : "poincare-dual-view"}
             onExport={mode === "aitoff" ? format => exportDualAitoff(format) : undefined}
           />
-          <div className="text-sm font-semibold text-muted-foreground">Poincare View</div>
+          <div className="plot-panel-title text-foreground">Poincare View</div>
         </div>
         <div className="flex items-center gap-2">
           <div className="inline-flex rounded-md border border-border/60 overflow-hidden">
@@ -745,7 +857,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           endPhase={endPhase}
           axisColor={axisColor}
           gridColor={gridColor}
-          mutedColor={themeIsDark ? "#9aa8bd" : "#64748b"}
+          mutedColor={themeIsDark ? "#f8fbff" : "#1f2937"}
           bgColor={plotBg}
           className="h-[calc(100%-2.5rem)] min-h-[520px] w-full"
         />
@@ -754,7 +866,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           key="poincare-3d"
           data={[sphere3d, points3d]}
           layout={{ ...layout3d, dragmode: "orbit" }}
-          config={paperPlotConfig("poincare-dual-view")}
+          config={paperPlotConfig("poincare-dual-view", { interactive: true })}
           useResizeHandler
           style={{ width: "100%", height: "100%" }}
         />
@@ -767,7 +879,22 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
       <div className="plot-toolbar mb-2">
         <FullscreenIconButton onClick={() => setFullscreen("right")} title="Fullscreen right" />
         <PlotExportButtons filename="polarisation-fractions-angles" />
-        <div className="text-sm font-semibold text-muted-foreground">Fractions and Angles</div>
+        <div className="plot-panel-title text-foreground">Polarization Fractions and Angles</div>
+      </div>
+      <div className="mb-3 flex flex-wrap gap-3 text-sm font-semibold text-foreground">
+        {[
+          ["p_frac", "P/I"],
+          ["l_frac", "L/I"],
+          ["v_frac", "V/I"],
+          ["absv_frac", "|V/I|"],
+          ["PA", "PA"],
+          ["EA", "EA"],
+        ].map(([key, label]) => (
+          <label key={key} className="inline-flex items-center gap-2 rounded-md border border-border/70 px-3 py-1.5">
+            <input type="checkbox" checked={visibleSeries[key as FractionSeriesKey]} onChange={() => toggleSeries(key as FractionSeriesKey)} />
+            <span>{label}</span>
+          </label>
+        ))}
       </div>
       <MemoizedPlot
         key={`fractions`}
@@ -802,17 +929,39 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   );
 
   const customPlotCard = (
-    <div className="plot-export-scope w-full rounded-lg border border-border/60 bg-card/60 p-4 shadow-sm">
-      <div className="flex justify-between items-center mb-3">
-        <div className="plot-toolbar">
+    <div className="w-full scientific-divider pt-8 mt-6">
+      <div className="flex justify-between items-center mb-3 gap-3">
+        <div className="plot-toolbar flex-1">
           <FullscreenIconButton onClick={() => setFullscreen("custom")} title="Fullscreen custom" />
-          <PlotExportButtons filename="custom-polarisation-xy" />
-          <div className="text-sm font-semibold text-muted-foreground">Custom XY Plot</div>
+          {customXYViewMode === "plot" ? (
+            <PlotExportButtons filename="custom-polarisation-xy" />
+          ) : (
+            <Button type="button" variant="outline" size="sm" onClick={exportCustomXYCsv} disabled={!customXYRows.length}>
+              Export CSV
+            </Button>
+          )}
+          <div className="plot-panel-title text-foreground">{`${yAxisLabel} vs ${xAxisLabel} Plot`}</div>
+        </div>
+        <div className="inline-flex rounded-md border border-border/60 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setCustomXYViewMode("plot")}
+            className={`px-3 py-1 text-xs font-semibold transition-colors ${customXYViewMode === "plot" ? activeToggleClass : inactiveToggleClass}`}
+          >
+            Plot
+          </button>
+          <button
+            type="button"
+            onClick={() => setCustomXYViewMode("table")}
+            className={`px-3 py-1 text-xs font-semibold transition-colors ${customXYViewMode === "table" ? activeToggleClass : inactiveToggleClass}`}
+          >
+            Table
+          </button>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
         <label className="flex flex-col gap-1 text-muted-foreground">
-          <span className="font-semibold text-foreground/80">X axis</span>
+          <span className="form-label text-foreground/80">X axis</span>
           <select
             value={xAxisKey}
             onChange={e => handleXAxisChange(e.target.value as AxisKey)}
@@ -824,7 +973,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           </select>
         </label>
         <label className="flex flex-col gap-1 text-muted-foreground">
-          <span className="font-semibold text-foreground/80">Y axis</span>
+          <span className="form-label text-foreground/80">Y axis</span>
           <select
             value={yAxisKey}
             onChange={e => handleYAxisChange(e.target.value as AxisKey)}
@@ -842,6 +991,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           yData={selectedYData}
           xLabel={xAxisLabel}
           yLabel={yAxisLabel}
+          viewMode={customXYViewMode}
           isDark={themeIsDark}
           axisColor={axisColor}
           gridColor={gridColor}
@@ -863,7 +1013,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
               <div ref={fullscreenAitoffScopeRef} className="plot-export-scope h-full w-full pt-8">
                 <div className="plot-toolbar mb-2">
                   <PlotExportButtons
-                    filename="poincare-dual-view-fullscreen"
+                    filename={mode === "aitoff" ? "poincare-dual-aitoff-fullscreen" : "poincare-dual-view-fullscreen"}
                     onExport={mode === "aitoff" ? format => exportDualAitoff(format, "fullscreen") : undefined}
                   />
                 </div>
@@ -874,7 +1024,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
                     endPhase={endPhase}
                     axisColor={axisColor}
                     gridColor={gridColor}
-                    mutedColor={themeIsDark ? "#9aa8bd" : "#64748b"}
+                    mutedColor={themeIsDark ? "#f8fbff" : "#1f2937"}
                     bgColor={plotBg}
                     fullscreen
                     className="h-[calc(100%-2.5rem)] w-full"
@@ -883,7 +1033,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
                   <MemoizedPlot
                     data={[sphere3d, points3d]}
                     layout={{ ...layout3d, autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 }, dragmode: "orbit" }}
-                    config={paperPlotConfig("poincare-dual-view-fullscreen")}
+                    config={paperPlotConfig("poincare-dual-view-fullscreen", { interactive: true })}
                     useResizeHandler
                     style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
                   />
@@ -904,14 +1054,39 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
               </div>
             ) : (
               <div className="plot-export-scope h-full w-full p-4 pt-10">
-                <div className="plot-toolbar mb-2">
-                  <PlotExportButtons filename="custom-polarisation-xy-fullscreen" />
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="plot-toolbar">
+                    {customXYViewMode === "plot" ? (
+                      <PlotExportButtons filename="custom-polarisation-xy-fullscreen" />
+                    ) : (
+                      <Button type="button" variant="outline" size="sm" onClick={exportCustomXYCsv} disabled={!customXYRows.length}>
+                        Export CSV
+                      </Button>
+                    )}
+                  </div>
+                  <div className="inline-flex rounded-md border border-border/60 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setCustomXYViewMode("plot")}
+                      className={`px-3 py-1 text-xs font-semibold transition-colors ${customXYViewMode === "plot" ? activeToggleClass : inactiveToggleClass}`}
+                    >
+                      Plot
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomXYViewMode("table")}
+                      className={`px-3 py-1 text-xs font-semibold transition-colors ${customXYViewMode === "table" ? activeToggleClass : inactiveToggleClass}`}
+                    >
+                      Table
+                    </button>
+                  </div>
                 </div>
                 <CustomXYPlot
                   xData={selectedXData}
                   yData={selectedYData}
                   xLabel={xAxisLabel}
                   yLabel={yAxisLabel}
+                  viewMode={customXYViewMode}
                   isDark={themeIsDark}
                   axisColor={axisColor}
                   gridColor={gridColor}
@@ -970,9 +1145,9 @@ function getUnitSphereSurface(steps: number): SphereSurface {
     x,
     y,
     z,
-    opacity: 0.15,
+    opacity: 0.28,
     showscale: false,
-    colorscale: [[0, "#ffffff"], [1, "#ffffff"]] as any,
+    colorscale: [[0, "#25354d"], [1, "#25354d"]] as any,
     hoverinfo: "skip" as const,
     showlegend: false,
     name: "Unit Sphere",
@@ -1010,23 +1185,6 @@ function getDualAitoffMetrics(width: number, height: number, fullscreen: boolean
     tickLength: clamp(minSide / 100, 5, 8),
     tickStrokeWidth: clamp(minSide / 720, 0.9, 1.35),
   };
-}
-
-function applySvgZoom(svg: any, zoomLayer: any, width: number, height: number) {
-  const behavior = zoom()
-    .scaleExtent([1, 7])
-    .translateExtent([[-width * 0.55, -height * 0.55], [width * 1.55, height * 1.55]])
-    .extent([[0, 0], [width, height]])
-    .on("zoom", (event: any) => {
-      zoomLayer.attr("transform", event.transform.toString());
-    });
-
-  svg.call(behavior);
-  svg.on("dblclick.zoom", null);
-  svg
-    .style("cursor", "grab")
-    .on("pointerdown", () => svg.style("cursor", "grabbing"))
-    .on("pointerup pointerleave", () => svg.style("cursor", "grab"));
 }
 
 function makeAitoffLineString(value: number, axis: "lat" | "lon") {

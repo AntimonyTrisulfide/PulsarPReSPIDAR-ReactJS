@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
 export type SinglePolarisationHistogramPayload = {
   obs_id?: string;
@@ -39,10 +40,20 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#e5e7eb" : "#111827";
   const gridColor = themeIsDark ? "#1f2937" : "#e5e7eb";
-  const paperBg = themeIsDark ? "#0b1220" : "#ffffff";
-  const plotBg = themeIsDark ? "#0b1220" : "#ffffff";
+  const paperBg = themeIsDark ? "#080808" : "#f7fafc";
+  const plotBg = themeIsDark ? "#080808" : "#f7fafc";
   const template = themeIsDark ? "plotly_dark" : "plotly_white";
   const themeKey = themeIsDark ? "dark" : "light";
+
+  const getEdgeAlignedRange = (values: number[], fallback: [number, number]) => {
+    if (values.length < 2) return fallback;
+    const firstStep = values[1] - values[0];
+    const lastStep = values[values.length - 1] - values[values.length - 2];
+    return [
+      values[0] - firstStep / 2,
+      values[values.length - 1] + lastStep / 2,
+    ] as [number, number];
+  };
 
   const { trace, layout, titleText } = useMemo(() => {
     const z = Array.isArray(data.log_hist2d) && data.log_hist2d.length ? data.log_hist2d : data.hist2d;
@@ -70,14 +81,13 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
       // External header handles title; keep plot title empty to avoid duplication
       xaxis: {
         title: { text: "Phase", standoff: 8 },
-        range: x.length ? [Math.min(...x), Math.max(...x)] : [data.start_phase, data.end_phase],
+        range: getEdgeAlignedRange(x, [data.start_phase, data.end_phase]),
         gridcolor: gridColor,
         linecolor: axisColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside",
         ticklen: 4,
-        titlefont: { color: axisColor },
         zerolinecolor: gridColor,
         showline: true,
         mirror: "allticks",
@@ -88,40 +98,39 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
         range: y.length ? [Math.min(...y), Math.max(...y)] : [data.q_min, data.q_max],
         gridcolor: gridColor,
         linecolor: axisColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside",
         ticklen: 4,
-        titlefont: { color: axisColor },
         zerolinecolor: gridColor,
         showline: true,
         mirror: "allticks",
         automargin: true,
       },
       margin: { l: 70, r: 40, t: 60, b: 60 },
-      height: 500,
+      height: 420,
       paper_bgcolor: paperBg,
       plot_bgcolor: plotBg,
-      font: { color: axisColor },
+      font: plotFont(axisColor),
       template,
     };
 
-    return { trace: traceObj, layout: layoutObj, titleText: title };
+    return { trace: traceObj, layout: lockCartesianInteractions(layoutObj), titleText: title };
   }, [data, axisColor, gridColor, paperBg, plotBg, template]);
 
   return (
-    <div className="plot-export-scope relative" style={{ width: "100%", padding: "1rem" }}>
+    <div className="plot-export-scope histogram-panel relative" style={{ width: "100%", padding: "0.35rem 0.5rem" }}>
       <div className="plot-toolbar mb-2">
         <FullscreenIconButton onClick={() => setIsFullscreen(true)} title="Open fullscreen" />
         <PlotExportButtons filename={`polarisation-histogram-${data.quantity_key}`} />
-        <div className="text-sm font-semibold text-foreground/90">{titleText}</div>
+        <div className="plot-panel-title text-foreground/90">{titleText}</div>
       </div>
       <Plot
         data={[trace]}
         layout={layout}
         config={paperPlotConfig(`polarisation-histogram-${data.quantity_key}`)}
         useResizeHandler
-        style={{ width: "100%", height: "500px" }}
+        style={{ width: "100%", height: "420px" }}
         key={`${themeKey}-${data.quantity_key}-${data.start_phase}-${data.end_phase}`}
       />
 

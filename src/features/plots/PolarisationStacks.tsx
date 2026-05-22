@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
 export type PolarisationStackPayload = {
   obs_id?: string;
@@ -33,15 +34,25 @@ export default function PolarisationStacks({ data, isDark }: Props) {
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#e5e7eb" : "#111827";
   const gridColor = themeIsDark ? "#1f2937" : "#e5e7eb";
-  const paperBg = themeIsDark ? "#0b1220" : "#ffffff";
-  const plotBg = themeIsDark ? "#0b1220" : "#ffffff";
+  const paperBg = themeIsDark ? "#080808" : "#f7fafc";
+  const plotBg = themeIsDark ? "#080808" : "#f7fafc";
   const template = themeIsDark ? "plotly_dark" : "plotly_white";
   const themeKey = themeIsDark ? "dark" : "light";
+
+  const getEdgeAlignedRange = (values: number[], fallback: [number, number]) => {
+    if (values.length < 2) return fallback;
+    const firstStep = values[1] - values[0];
+    const lastStep = values[values.length - 1] - values[values.length - 2];
+    return [
+      values[0] - firstStep / 2,
+      values[values.length - 1] + lastStep / 2,
+    ] as [number, number];
+  };
 
   const items = useMemo(() => {
     const x = Array.isArray(data.phase_axis) ? data.phase_axis : [];
     const y = Array.isArray(data.pulse_number) ? data.pulse_number : [];
-    const xRange = x.length ? [Math.min(...x), Math.max(...x)] : [data.start_phase, data.end_phase];
+    const xRange = getEdgeAlignedRange(x, [data.start_phase, data.end_phase]);
 
     return data.quantities.map(q => {
       const z = Array.isArray(q.data) ? q.data : [];
@@ -70,11 +81,10 @@ export default function PolarisationStacks({ data, isDark }: Props) {
           range: xRange,
           gridcolor: gridColor,
           linecolor: axisColor,
-          tickfont: { color: axisColor },
+          ...plotAxisText(axisColor),
           tickcolor: axisColor,
           ticks: "outside",
           ticklen: 4,
-          titlefont: { color: axisColor },
           zerolinecolor: gridColor,
           showline: true,
           mirror: "allticks",
@@ -85,11 +95,10 @@ export default function PolarisationStacks({ data, isDark }: Props) {
           range: y.length ? [Math.min(...y), Math.max(...y)] : undefined,
           gridcolor: gridColor,
           linecolor: axisColor,
-          tickfont: { color: axisColor },
+          ...plotAxisText(axisColor),
           tickcolor: axisColor,
           ticks: "outside",
           ticklen: 4,
-          titlefont: { color: axisColor },
           zerolinecolor: gridColor,
           showline: true,
           mirror: "allticks",
@@ -99,11 +108,11 @@ export default function PolarisationStacks({ data, isDark }: Props) {
         height: 360,
         paper_bgcolor: paperBg,
         plot_bgcolor: plotBg,
-        font: { color: axisColor },
+        font: plotFont(axisColor),
         template,
       };
 
-      return { trace, layout, key: `${q.name}-${themeKey}`, label };
+      return { trace, layout: lockCartesianInteractions(layout), key: `${q.name}-${themeKey}`, label };
     });
   }, [data, axisColor, gridColor, paperBg, plotBg, template, themeKey]);
 
@@ -115,11 +124,11 @@ export default function PolarisationStacks({ data, isDark }: Props) {
         <div className="lg:col-span-2 text-sm text-yellow-500">{data.warning}</div>
       )}
       {items.map(item => (
-        <div key={item.key} className="plot-export-scope plot-frame">
-          <div className="plot-frame-header justify-start">
+        <div key={item.key} className="plot-export-scope min-w-0">
+          <div className="plot-toolbar mb-2">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
             <PlotExportButtons filename={`polarisation-stack-${item.key}`} />
-            <div className="plot-frame-title">{item.label}</div>
+            <div className="plot-panel-title text-foreground">{item.label}</div>
           </div>
           <Plot
             data={[item.trace]}

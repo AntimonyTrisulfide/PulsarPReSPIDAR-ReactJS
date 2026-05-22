@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
 export type PolarisationHistogramPayload = {
   obs_id?: string;
@@ -47,8 +48,8 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#e5e7eb" : "#111827";
   const gridColor = themeIsDark ? "#1f2937" : "#e5e7eb";
-  const paperBg = themeIsDark ? "#0b1220" : "#ffffff";
-  const plotBg = themeIsDark ? "#0b1220" : "#ffffff";
+  const paperBg = themeIsDark ? "#080808" : "#f7fafc";
+  const plotBg = themeIsDark ? "#080808" : "#f7fafc";
   const template = themeIsDark ? "plotly_dark" : "plotly_white";
   const themeKey = themeIsDark ? "dark" : "light";
 
@@ -75,7 +76,7 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
       margin: { l: 70, r: 50, t: 70, b: 60 },
       paper_bgcolor: paperBg,
       plot_bgcolor: plotBg,
-      font: { color: axisColor },
+      font: plotFont(axisColor),
       template,
     };
 
@@ -121,11 +122,10 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
         range: xRange,
         gridcolor: gridColor,
         linecolor: axisColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside",
         ticklen: 4,
-        titlefont: { color: axisColor },
         zerolinecolor: gridColor,
         showline: true,
         mirror: "allticks",
@@ -136,11 +136,10 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
         range: [yMin, yMax],
         gridcolor: gridColor,
         linecolor: axisColor,
-        tickfont: { color: axisColor },
+        ...plotAxisText(axisColor),
         tickcolor: axisColor,
         ticks: "outside",
         ticklen: 4,
-        titlefont: { color: axisColor },
         zerolinecolor: gridColor,
         showline: true,
         mirror: "allticks",
@@ -172,7 +171,7 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
     });
 
     layoutAcc.annotations = annotations;
-    return { traces: tracesAcc, layout: layoutAcc, summaries: summariesAcc };
+    return { traces: tracesAcc, layout: lockCartesianInteractions(layoutAcc), summaries: summariesAcc };
   }, [data, axisColor, gridColor, paperBg, plotBg, template]);
 
   return (

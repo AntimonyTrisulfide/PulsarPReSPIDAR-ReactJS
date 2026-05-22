@@ -14,6 +14,9 @@ const pngIcon = {
 };
 
 export type PlotExportFormat = "png" | "svg";
+type PlotConfigOptions = {
+  interactive?: boolean;
+};
 
 export function safePlotFilename(filename: string) {
   return filename.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "polarimetry-plot";
@@ -42,7 +45,17 @@ export function downloadPlotlyFromContainer(container: HTMLElement | null, filen
   void downloadPlot(graphDiv, filename, format);
 }
 
-export function paperPlotConfig(filename: string): Partial<Config> {
+export function paperPlotConfig(filename: string, options: PlotConfigOptions = {}): Partial<Config> {
+  if (!options.interactive) {
+    return {
+      responsive: true,
+      displayModeBar: false,
+      displaylogo: false,
+      scrollZoom: false,
+      doubleClick: false,
+    };
+  }
+
   const outputName = safePlotFilename(filename);
 
   return {
@@ -72,6 +85,22 @@ export function paperPlotConfig(filename: string): Partial<Config> {
     ] as any,
     modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"],
   };
+}
+
+export function lockCartesianInteractions<T extends Record<string, any>>(layout: T): T {
+  const lockedLayout: Record<string, any> = { ...layout };
+
+  Object.entries(lockedLayout).forEach(([key, value]) => {
+    if (!value || typeof value !== "object") return;
+    if (key === "xaxis" || key === "yaxis" || /^xaxis\d+$/.test(key) || /^yaxis\d+$/.test(key)) {
+      lockedLayout[key] = {
+        ...value,
+        fixedrange: true,
+      };
+    }
+  });
+
+  return lockedLayout as T;
 }
 
 function downloadDataUrl(dataUrl: string, filename: string) {

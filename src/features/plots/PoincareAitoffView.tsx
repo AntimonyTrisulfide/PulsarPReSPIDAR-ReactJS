@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Plot from "react-plotly.js";
-import { geoGraticule, geoPath, scaleLinear, select, zoom } from "d3";
+import { geoGraticule, geoPath, scaleLinear, select } from "d3";
 import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
 import { paperPlotConfig, type PlotExportFormat } from "@/shared/plot/plotlyConfig";
+import { PLOT_AXIS_TITLE_SIZE, PLOT_TICK_FONT_SIZE, plotFont } from "@/shared/plot/plotTypography";
 import { downloadSvgElement } from "@/shared/plot/svgExport";
 import { useElementSize } from "@/shared/plot/useElementSize";
 
@@ -27,7 +28,6 @@ type AitoffPoint = {
 const latLabelValues = [-60, -30, 0, 30, 60];
 const lonLabelValues = [-135, -90, -45, 0, 45, 90, 135];
 const AITOFF_PNG_EXPORT_SCALE = 4;
-
 export default function PoincareAitoffView({ data, phaseValue, isDark }: PoincareAitoffViewProps) {
   const [fullscreenKey, setFullscreenKey] = useState<"aitoff" | "3d" | null>(null);
   const [view, setView] = useState<"aitoff" | "3d">("aitoff");
@@ -38,11 +38,11 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   const fullscreenAitoffSize = useElementSize(fullscreenRef, { width: 1320, height: 760 }, { width: 520, height: 420 });
 
   const themeIsDark = !!isDark;
-  const axisColor = themeIsDark ? "#d7dde8" : "#172033";
-  const gridColor = themeIsDark ? "#334155" : "#c9d2df";
-  const bgColor = themeIsDark ? "#0b1120" : "#ffffff";
-  const mutedColor = themeIsDark ? "#9aa8bd" : "#64748b";
-  const surfaceColor = themeIsDark ? "#dbeafe" : "#1f4e79";
+  const axisColor = themeIsDark ? "#f8fbff" : "#111827";
+  const gridColor = themeIsDark ? "#dce7f7" : "#334155";
+  const bgColor = themeIsDark ? "#080808" : "#f7fafc";
+  const mutedColor = themeIsDark ? "#f8fbff" : "#1f2937";
+  const surfaceColor = themeIsDark ? "#2a2a2a" : "#dde7ef";
 
   const points = useMemo<AitoffPoint[]>(() => {
     if (!data) return [];
@@ -84,12 +84,12 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   const sphere3d = useMemo(() => ({
     type: "surface" as const,
     ...getUnitSphereSurface(32),
-    opacity: 0.14,
+    opacity: 0.32,
     colorscale: [[0, surfaceColor], [1, surfaceColor]] as any,
     showscale: false,
     hoverinfo: "skip" as const,
     name: "Unit sphere",
-  }), [surfaceColor]);
+  }) as any, [surfaceColor]);
 
   const points3d = useMemo(() => ({
     type: "scatter3d" as const,
@@ -107,14 +107,14 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       opacity: 0.9,
       showscale: true,
       colorbar: {
-        title: { text: "Latitude (deg)" },
+        title: { text: "" },
         orientation: "h" as const,
         x: 0.5,
         y: -0.12,
         len: 0.62,
       },
     },
-    hovertemplate: "x %{x:.3f}<br>y %{y:.3f}<br>z %{z:.3f}<extra></extra>",
+    hovertemplate: "Q %{x:.3f}<br>U %{y:.3f}<br>V %{z:.3f}<extra></extra>",
     name: "Poincare points",
   }), [colorDomain, points, xyz]);
 
@@ -122,16 +122,17 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
     title: undefined,
     dragmode: "orbit" as const,
     scene: {
-      xaxis: makeSceneAxis("X", axisColor, gridColor),
-      yaxis: makeSceneAxis("Y", axisColor, gridColor),
-      zaxis: makeSceneAxis("Z", axisColor, gridColor),
+      xaxis: makeSceneAxis("Q", axisColor, gridColor),
+      yaxis: makeSceneAxis("U", axisColor, gridColor),
+      zaxis: makeSceneAxis("V", axisColor, gridColor),
       aspectmode: "cube" as const,
       camera: { eye: { x: 1.45, y: 1.45, z: 1.05 } },
+      bgcolor: bgColor,
     },
     margin: { l: 0, r: 0, t: 20, b: 42 },
     paper_bgcolor: bgColor,
     plot_bgcolor: bgColor,
-    font: { color: axisColor, family: "Inter, ui-sans-serif, system-ui, sans-serif" },
+    font: plotFont(axisColor),
   }), [axisColor, bgColor, gridColor]);
 
   const drawAitoff = useCallback((target: HTMLDivElement, size: { width: number; height: number }, isFullscreen = false) => {
@@ -159,8 +160,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       { type: "Sphere" },
     );
     const path = geoPath(projection);
-    const zoomLayer = svg.append("g").attr("class", "aitoff-zoom-layer");
-    const g = zoomLayer.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
     g.append("path")
       .datum({ type: "Sphere" })
@@ -246,8 +246,24 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
       .text((lon: number) => `${lon} deg`);
 
+    svg.append("text")
+      .attr("x", width / 2)
+      .attr("y", height - labelFontSize * 0.15)
+      .attr("text-anchor", "middle")
+      .attr("font-size", Math.max(12, labelFontSize - 1))
+      .attr("font-weight", 700)
+      .attr("fill", axisColor)
+      .text("Longitude (2PA)");
+
+    svg.append("text")
+      .attr("transform", `translate(${Math.max(16, margin.left * 0.24)}, ${margin.top + innerHeight / 2}) rotate(-90)`)
+      .attr("text-anchor", "middle")
+      .attr("font-size", Math.max(12, labelFontSize - 1))
+      .attr("font-weight", 700)
+      .attr("fill", axisColor)
+      .text("Latitude (2EA)");
+
     drawColorbar(svg, width, height, gradientId, colorDomain, colorScale, axisColor, mutedColor, labelFontSize);
-    applySvgZoom(svg, zoomLayer, width, height);
   }, [axisColor, bgColor, colorDomain, colorScale, gradientId, gridColor, mutedColor, points]);
 
   useEffect(() => {
@@ -265,7 +281,9 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   const exportAitoff = (format: PlotExportFormat, source: "inline" | "fullscreen" = "inline") => {
     const sourceRef = source === "fullscreen" ? fullscreenRef : containerRef;
     const svg = sourceRef.current?.querySelector("svg");
-    const filename = `fixed-phase-poincare-aitoff-${phaseValue?.toFixed(3) ?? "phase"}`;
+    const filename = phaseValue !== undefined
+      ? `fixed-phase-poincare-aitoff-${phaseValue.toFixed(3)}`
+      : "fixed-phase-poincare-aitoff";
     downloadSvgElement(svg ?? null, filename, format, AITOFF_PNG_EXPORT_SCALE);
   };
 
@@ -275,8 +293,8 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
   const inactiveToggleClass = themeIsDark ? "text-slate-200 hover:bg-white/5" : "text-slate-800 hover:bg-slate-100";
 
   return (
-    <div className="plot-export-scope plot-frame">
-      <div className="plot-frame-header justify-start">
+    <div className="plot-export-scope">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
         <div className="plot-toolbar">
           <FullscreenIconButton onClick={() => setFullscreenKey(view)} title="Fullscreen" />
           <PlotExportButtons
@@ -300,11 +318,14 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
             </button>
           </div>
         </div>
-        <div>
-          <div className="plot-frame-title">
+        <div className="min-w-0">
+          <div className="plot-panel-title text-foreground">
             {view === "aitoff" ? "Fixed-phase Poincare Aitoff projection" : "Fixed-phase Poincare sphere"}
           </div>
-          <div className="plot-frame-meta">{points.length.toLocaleString()} samples</div>
+          <div className="plot-panel-meta text-foreground/80">
+            {phaseValue !== undefined ? `Phase ${phaseValue.toFixed(3)} · ` : ""}
+            {points.length.toLocaleString()} samples
+          </div>
         </div>
       </div>
 
@@ -314,7 +335,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
         <Plot
           data={[sphere3d, points3d]}
           layout={layout3d as any}
-          config={paperPlotConfig("fixed-phase-poincare-sphere")}
+          config={paperPlotConfig("fixed-phase-poincare-sphere", { interactive: true })}
           useResizeHandler
           style={{ width: "100%", height: "620px" }}
         />
@@ -337,7 +358,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
               <Plot
                 data={[sphere3d, points3d]}
                 layout={{ ...(layout3d as any), autosize: true, height: undefined }}
-                config={paperPlotConfig("fixed-phase-poincare-sphere-fullscreen")}
+                config={paperPlotConfig("fixed-phase-poincare-sphere-fullscreen", { interactive: true })}
                 useResizeHandler
                 style={{ width: "100%", height: "calc(100% - 2.5rem)" }}
               />
@@ -386,23 +407,6 @@ function getAitoffMetrics(width: number, height: number, isFullscreen: boolean) 
     tickLength: clamp(minSide / 100, 5, 8),
     tickStrokeWidth: clamp(minSide / 720, 0.9, 1.35),
   };
-}
-
-function applySvgZoom(svg: any, zoomLayer: any, width: number, height: number) {
-  const behavior = zoom()
-    .scaleExtent([1, 7])
-    .translateExtent([[-width * 0.55, -height * 0.55], [width * 1.55, height * 1.55]])
-    .extent([[0, 0], [width, height]])
-    .on("zoom", (event: any) => {
-      zoomLayer.attr("transform", event.transform.toString());
-    });
-
-  svg.call(behavior);
-  svg.on("dblclick.zoom", null);
-  svg
-    .style("cursor", "grab")
-    .on("pointerdown", () => svg.style("cursor", "grabbing"))
-    .on("pointerup pointerleave", () => svg.style("cursor", "grab"));
 }
 
 function makeLineString(value: number, axis: "lat" | "lon") {
@@ -473,16 +477,15 @@ function drawColorbar(
 
 function makeSceneAxis(title: string, axisColor: string, gridColor: string) {
   return {
-    title: { text: title },
+    title: { text: title, font: { color: axisColor, size: PLOT_AXIS_TITLE_SIZE } },
     range: [-1, 1],
     gridcolor: gridColor,
     zerolinecolor: gridColor,
     linecolor: axisColor,
-    tickfont: { color: axisColor },
+    tickfont: { color: axisColor, size: PLOT_TICK_FONT_SIZE },
     tickcolor: axisColor,
     ticks: "outside" as const,
     ticklen: 4,
-    titlefont: { color: axisColor },
     showline: true,
   };
 }

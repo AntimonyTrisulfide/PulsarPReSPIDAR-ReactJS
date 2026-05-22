@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
-import { paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
+import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
 export type PhaseSliceHistogramData = {
   obs_id?: string;
@@ -43,8 +44,8 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
   const themeIsDark = !!isDark;
   const axisColor = themeIsDark ? "#e5e7eb" : "#111827";
   const gridColor = themeIsDark ? "#1f2937" : "#e5e7eb";
-  const paperBg = themeIsDark ? "#0b1220" : "#ffffff";
-  const plotBg = themeIsDark ? "#0b1220" : "#ffffff";
+  const paperBg = themeIsDark ? "#080808" : "#f7fafc";
+  const plotBg = themeIsDark ? "#080808" : "#f7fafc";
   const template = themeIsDark ? "plotly_dark" : "plotly_white";
   const themeKey = themeIsDark ? "dark" : "light";
 
@@ -55,11 +56,11 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
       const layoutAcc: any = {
         grid: { rows: 1, columns: cols, pattern: "independent" },
         showlegend: false,
-        height: 260,
-        margin: { l: 80, r: 50, t: 50, b: 70 },
+        height: 230,
+        margin: { l: 72, r: 36, t: 34, b: 58 },
         paper_bgcolor: paperBg,
         plot_bgcolor: plotBg,
-        font: { color: axisColor },
+        font: plotFont(axisColor),
         template,
       };
 
@@ -98,11 +99,10 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
           zeroline: false,
           gridcolor: gridColor,
           linecolor: axisColor,
-          tickfont: { color: axisColor },
+          ...plotAxisText(axisColor),
           tickcolor: axisColor,
           ticks: "outside",
           ticklen: 4,
-          titlefont: { color: axisColor },
           fixedrange: false,
           showline: true,
           mirror: "allticks",
@@ -113,11 +113,10 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
           rangemode: "tozero",
           gridcolor: gridColor,
           linecolor: axisColor,
-          tickfont: { color: axisColor },
+          ...plotAxisText(axisColor),
           tickcolor: axisColor,
           ticks: "outside",
           ticklen: 4,
-          titlefont: { color: axisColor },
           fixedrange: false,
           showline: true,
           mirror: "allticks",
@@ -126,7 +125,7 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
 
       });
 
-      return { key: `${quantity.name}-${qIndex}-${themeKey}`, quantity, traces: tracesAcc, layout: layoutAcc };
+      return { key: `${quantity.name}-${qIndex}-${themeKey}`, quantity, traces: tracesAcc, layout: lockCartesianInteractions(layoutAcc) };
     });
   }, [data, axisColor, gridColor, paperBg, plotBg, template, themeKey]);
 
@@ -137,15 +136,15 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
       {items.map(item => (
         <div
           key={item.key}
-          className="plot-export-scope relative border border-border/50 rounded-lg overflow-hidden p-3"
+          className="plot-export-scope histogram-panel relative overflow-hidden py-2"
         >
           <div className="plot-toolbar mb-1">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
             <PlotExportButtons filename={`phase-slice-${item.quantity.name}`} />
-            <div className="text-sm font-semibold text-foreground/90">{item.quantity.name}</div>
+            <div className="plot-panel-title text-foreground/90">{item.quantity.name}</div>
           </div>
           {phaseWindow && (
-            <div className="mb-2 text-xs text-muted-foreground">
+            <div className="plot-panel-meta mb-2 text-muted-foreground">
               Left: {phaseWindow.left.toFixed(3)} / Mid: {phaseWindow.mid.toFixed(3)} / Right: {phaseWindow.right.toFixed(3)}
             </div>
           )}
@@ -154,7 +153,7 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
             layout={item.layout}
             config={paperPlotConfig(`phase-slice-${item.quantity.name}`)}
             useResizeHandler
-            style={{ width: "100%", height: "260px" }}
+            style={{ width: "100%", height: "230px" }}
             key={`${item.key}-inline`}
           />
         </div>
