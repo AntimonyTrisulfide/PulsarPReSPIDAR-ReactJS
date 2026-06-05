@@ -60,9 +60,9 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
     const x = Array.isArray(data.phase_axis) ? data.phase_axis : [];
     const y = Array.isArray(data.bin_centers) ? data.bin_centers : [];
     const hasZ = z && z.length > 0 && z[0]?.length > 0;
-    const zFlat = hasZ ? z.flat().filter(v => Number.isFinite(v)) : [];
-    const zmin = zFlat.length ? Math.min(...zFlat) : undefined;
-    const zmax = zFlat.length ? Math.max(...zFlat) : undefined;
+    const zExtent = hasZ ? getFiniteExtent2d(z) : null;
+    const zmin = zExtent?.min;
+    const zmax = zExtent?.max;
 
     const traceObj = {
       type: "heatmap" as const,
@@ -153,4 +153,22 @@ export default function SinglePolarisationHistogram({ data, isDark }: Props) {
       )}
     </div>
   );
+}
+
+function getFiniteExtent2d(values: number[][]) {
+  let min = Infinity;
+  let max = -Infinity;
+  let found = false;
+
+  for (const row of values) {
+    if (!Array.isArray(row)) continue;
+    for (const value of row) {
+      if (!Number.isFinite(value)) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+      found = true;
+    }
+  }
+
+  return found ? { min, max } : null;
 }

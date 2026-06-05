@@ -56,9 +56,11 @@ export default function PolarisationStacks({ data, isDark }: Props) {
 
     return data.quantities.map(q => {
       const z = Array.isArray(q.data) ? q.data : [];
-      const flat = z.flat().filter(v => Number.isFinite(v));
-      const zmin = q.vmin ?? (flat.length ? Math.min(...flat) : undefined);
-      const zmax = q.vmax ?? (flat.length ? Math.max(...flat) : undefined);
+      const hasBackendMin = typeof q.vmin === "number" && Number.isFinite(q.vmin);
+      const hasBackendMax = typeof q.vmax === "number" && Number.isFinite(q.vmax);
+      const zExtent = hasBackendMin && hasBackendMax ? null : getFiniteExtent2d(z);
+      const zmin = hasBackendMin ? q.vmin : zExtent?.min;
+      const zmax = hasBackendMax ? q.vmax : zExtent?.max;
       const label = q.name;
       const colorscale = zmin !== undefined && zmax !== undefined && zmin < 0 && zmax > 0 ? "BWR" : "Viridis";
 
@@ -160,4 +162,22 @@ export default function PolarisationStacks({ data, isDark }: Props) {
       )}
     </div>
   );
+}
+
+function getFiniteExtent2d(values: number[][]) {
+  let min = Infinity;
+  let max = -Infinity;
+  let found = false;
+
+  for (const row of values) {
+    if (!Array.isArray(row)) continue;
+    for (const value of row) {
+      if (!Number.isFinite(value)) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+      found = true;
+    }
+  }
+
+  return found ? { min, max } : null;
 }

@@ -5,6 +5,8 @@ import PhaseSliceHistograms from "@/features/plots/PhaseSliceHistograms";
 import SinglePolarisationHistogram from "@/features/plots/SinglePolarisationHistogram";
 import PolarisationStacks from "@/features/plots/PolarisationStacks";
 import PolarisationDualView from "@/features/plots/PolarisationDualView";
+import RadiusOfCurvaturePlot from "@/features/plots/RadiusOfCurvaturePlot";
+import SubpulsePolarisationView from "@/features/plots/SubpulsePolarisationView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { CatalogueModal } from "./components/CatalogueModal";
 import {
@@ -29,20 +31,27 @@ import {
   fetchPolarisationStacks as requestPolarisationStacks,
   fetchProfilesData as requestProfilesData,
   isInvalidPhaseRange,
+  isMeerTimeUrl,
   loadRemoteNpz,
   prepareDataset as requestPrepareDataset,
   type DatasetSource,
   type ObservationMetadata,
 } from "@/api/polarimetryApi";
 import { useThemePreference } from "@/hooks/useThemePreference";
+import { useStaggeredThemeValue } from "@/hooks/useStaggeredThemeValue";
 import {
   persistDatasetBlob,
   persistPlotSettings,
   readPersistedDatasetBlob,
   readPersistedPlotSettings,
 } from "@/lib/sessionCache";
+import {
+  clearRemoteAuthCookie,
+  readRemoteAuthCookie,
+  writeRemoteAuthCookie,
+} from "@/lib/remoteAuthCookie";
 
-type PlotRequestKey = "profiles" | "heatmaps" | "aitoff" | "phaseSlices" | "polarHistograms" | "polarStacks" | "polarParams";
+type PlotRequestKey = "profiles" | "heatmaps" | "polarParams" | "subpulseParams" | "polarHistograms" | "polarStacks" | "phaseSlices" | "aitoff";
 type PlotRequestState = PlotRequestViewState & { version: number };
 type QueuedPlotRequest = {
   key: PlotRequestKey;
@@ -50,12 +59,15 @@ type QueuedPlotRequest = {
   version: number;
 };
 
-const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "aitoff", "phaseSlices", "polarHistograms", "polarStacks", "polarParams"];
+const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "polarParams", "subpulseParams", "polarHistograms", "polarStacks", "phaseSlices", "aitoff"];
 const PLOT_REQUEST_DEBOUNCE_MS = 350;
 const PLOT_REQUEST_CONCURRENCY = getPositiveIntegerEnv(import.meta.env.VITE_PLOT_REQUEST_CONCURRENCY, 1);
 const PLOT_REQUEST_COOLDOWN_MS = getNonNegativeNumberEnv(import.meta.env.VITE_PLOT_REQUEST_COOLDOWN_MS, 550);
-const TEST_LOADING_DELAY_MS = 1800;
+const ARTIFICIAL_LOADING_DELAY_MS = import.meta.env.DEV
+  ? getNonNegativeNumberEnv(import.meta.env.VITE_TEST_LOADING_DELAY_MS, 0)
+  : 0;
 const delay = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
+const delayIfConfigured = () => ARTIFICIAL_LOADING_DELAY_MS > 0 ? delay(ARTIFICIAL_LOADING_DELAY_MS) : Promise.resolve();
 
 function getPositiveIntegerEnv(value: string | undefined, fallback: number) {
   const parsed = Number(value);
@@ -71,11 +83,12 @@ function createPlotRequestStates(): Record<PlotRequestKey, PlotRequestState> {
   return {
     profiles: { status: "idle", version: 0 },
     heatmaps: { status: "idle", version: 0 },
-    aitoff: { status: "idle", version: 0 },
-    phaseSlices: { status: "idle", version: 0 },
+    polarParams: { status: "idle", version: 0 },
+    subpulseParams: { status: "idle", version: 0 },
     polarHistograms: { status: "idle", version: 0 },
     polarStacks: { status: "idle", version: 0 },
-    polarParams: { status: "idle", version: 0 },
+    phaseSlices: { status: "idle", version: 0 },
+    aitoff: { status: "idle", version: 0 },
   };
 }
 
@@ -83,21 +96,32 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "The backend request failed.";
 }
 
+function isRemoteAuthFailure(error: unknown) {
+  return error instanceof Error && /\((401|403)\)/.test(error.message);
+}
+
 const App: React.FC = () => {
+  const initialRemoteCredentials = React.useMemo(() => readRemoteAuthCookie(DEFAULT_MEERTIME_NPZ_URL), []);
   const [isDark, setIsDark] = useThemePreference();
   const [catalogueModalOpen, setCatalogueModalOpen] = useState(false);
   const [file, setFile] = useState<File | Blob | null>(null);
   const [url, setUrl] = useState<string>(DEFAULT_MEERTIME_NPZ_URL);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(initialRemoteCredentials?.username ?? "");
+  const [password, setPassword] = useState(initialRemoteCredentials?.password ?? "");
   const [showPassword, setShowPassword] = useState(false);
+  const [hasStoredRemoteCredentials, setHasStoredRemoteCredentials] = useState(Boolean(initialRemoteCredentials));
+  const [showRemoteCredentialFields, setShowRemoteCredentialFields] = useState(isMeerTimeUrl(DEFAULT_MEERTIME_NPZ_URL) && !initialRemoteCredentials);
   const [poincareAitoffData, setPoincareAitoffData] = useState<any>(null);
   const [phaseHistogramData, setPhaseHistogramData] = useState<any>(null);
   const [polHistogramData, setPolHistogramData] = useState<Record<string, any> | null>(null);
   const [polStacksData, setPolStacksData] = useState<any>(null);
   const [polarParamsData, setPolarParamsData] = useState<any>(null);
+  const [subpulsePolarParamsData, setSubpulsePolarParamsData] = useState<any>(null);
   const [startPhaseAitoff, setStartPhaseAitoff] = useState(0.0);
   const [endPhaseAitoff, setEndPhaseAitoff] = useState(1.0);
+  const [startPhaseSubpulse, setStartPhaseSubpulse] = useState(0.0);
+  const [endPhaseSubpulse, setEndPhaseSubpulse] = useState(1.0);
+  const [selectedSubpulseIndex, setSelectedSubpulseIndex] = useState(0);
   const [startPhasePolHist, setStartPhasePolHist] = useState(0.0);
   const [endPhasePolHist, setEndPhasePolHist] = useState(1.0);
   const [startPhasePolStacks, setStartPhasePolStacks] = useState(0.0);
@@ -114,6 +138,7 @@ const App: React.FC = () => {
   const [rightPhaseHist, setRightPhaseHist] = useState(1.0);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const themeSwitchCleanupRef = useRef<number | null>(null);
   const [obsMetadata, setObsMetadata] = useState<ObservationMetadata | null>(null);
   const [isLoadingRemoteFile, setIsLoadingRemoteFile] = useState(false);
   const [isPreparingBackendDataset, setIsPreparingBackendDataset] = useState(false);
@@ -130,6 +155,7 @@ const App: React.FC = () => {
     polarHistograms: 0,
     polarStacks: 0,
     polarParams: 0,
+    subpulseParams: 0,
   });
 
   // Plot parameters
@@ -246,8 +272,12 @@ const App: React.FC = () => {
     setPolHistogramData(null);
     setPolStacksData(null);
     setPolarParamsData(null);
+    setSubpulsePolarParamsData(null);
     setStartPhaseAitoff(0.0);
     setEndPhaseAitoff(1.0);
+    setStartPhaseSubpulse(0.0);
+    setEndPhaseSubpulse(1.0);
+    setSelectedSubpulseIndex(0);
     setStartPhasePolHist(0.0);
     setEndPhasePolHist(1.0);
     setStartPhasePolStacks(0.0);
@@ -266,7 +296,7 @@ const App: React.FC = () => {
   const prepareBackendDataset = async (incoming: File | Blob, onPulse: { start: number; end: number }) => {
     setIsPreparingBackendDataset(true);
     try {
-      await delay(TEST_LOADING_DELAY_MS);
+      await delayIfConfigured();
       const prepared = await requestPrepareDataset(incoming, onPulse);
       return prepared.data_key;
     } catch (error) {
@@ -371,17 +401,54 @@ const App: React.FC = () => {
   // Handle URL load (fetch file as Blob and store in state)
   const handleLoadFromUrl = async () => {
     if (isLoadingRemoteFile) return;
-    if (!url || !username || !password) {
-      console.warn("Please fill in the URL and credentials.");
+
+    const remoteUrl = url.trim();
+    if (!remoteUrl) {
+      console.warn("Please fill in the URL.");
       return;
     }
+
+    const isMeerTimeRemoteUrl = isMeerTimeUrl(remoteUrl);
+    const storedCredentials = hasStoredRemoteCredentials && !showRemoteCredentialFields
+      ? readRemoteAuthCookie(remoteUrl)
+      : null;
+    const shouldSendCredentials = Boolean(storedCredentials) || showRemoteCredentialFields || isMeerTimeRemoteUrl;
+    let credentials: { username: string; password: string } | undefined;
+    if (shouldSendCredentials) {
+      if (hasStoredRemoteCredentials && !showRemoteCredentialFields && !storedCredentials) {
+        setHasStoredRemoteCredentials(false);
+        setShowRemoteCredentialFields(true);
+        setPassword("");
+        console.warn("Please enter credentials for this URL.");
+        return;
+      }
+
+      credentials = storedCredentials ?? {
+        username: username.trim(),
+        password,
+      };
+
+      if (!credentials.username || !credentials.password) {
+        setShowRemoteCredentialFields(true);
+        console.warn("Please enter credentials for this URL.");
+        return;
+      }
+    }
+
     setIsLoadingRemoteFile(true);
     try {
-      await delay(TEST_LOADING_DELAY_MS);
-      const remoteFile = await loadRemoteNpz(url, username, password);
+      await delayIfConfigured();
+      const remoteFile = await loadRemoteNpz(remoteUrl, credentials);
       const { start, end, mid } = remoteFile.onPulse;
       const dataKey = await prepareBackendDataset(remoteFile.blob, { start, end });
       applyNewFile(remoteFile.blob, dataKey, { start, end });
+      if (credentials) {
+        writeRemoteAuthCookie(remoteUrl, credentials);
+        setHasStoredRemoteCredentials(true);
+        setShowRemoteCredentialFields(false);
+        setUsername(credentials.username);
+        setPassword(credentials.password);
+      }
       setObsMetadata(remoteFile.metadata);
       setLeftPhaseHist(start);
       setMidPhaseHist(mid);
@@ -389,6 +456,9 @@ const App: React.FC = () => {
       setStartPhaseAitoff(start);
       setEndPhaseAitoff(end);
       setAitoffPhase(mid);
+      setStartPhaseSubpulse(start);
+      setEndPhaseSubpulse(end);
+      setSelectedSubpulseIndex(0);
       setStartPhasePolHist(start);
       setEndPhasePolHist(end);
       setStartPhasePolStacks(start);
@@ -404,6 +474,12 @@ const App: React.FC = () => {
       void persistDatasetBlob(remoteFile.blob);
     } catch (err) {
       console.error("Error loading file:", err);
+      if (isRemoteAuthFailure(err)) {
+        clearRemoteAuthCookie(remoteUrl);
+        setHasStoredRemoteCredentials(false);
+        setShowRemoteCredentialFields(true);
+        setPassword("");
+      }
     } finally {
       setIsLoadingRemoteFile(false);
     }
@@ -540,6 +616,33 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchSubpulsePolarisationParams = async () => {
+    const source = getDatasetSource();
+    if (!source) {
+      console.warn("No file selected or loaded.");
+      return;
+    }
+    if (isInvalidRange(startPhaseSubpulse, endPhaseSubpulse)) {
+      console.warn("Fix selected subpulse start/end: start must be <= end.");
+      return;
+    }
+
+    const backendPulseIndex = Math.max(0, Math.floor(selectedSubpulseIndex)) + 1;
+    try {
+      const result = await requestPolarisationParams(
+        source,
+        { start: startPhaseSubpulse, end: endPhaseSubpulse },
+        datasetOnPulse,
+        0,
+        backendPulseIndex,
+      );
+      setSubpulsePolarParamsData(result);
+    } catch (err) {
+      console.error("Error fetching selected subpulse polarisation parameters:", err);
+      throw err;
+    }
+  };
+
   // Call /phase_slice_histograms endpoint
   const fetchPhaseSliceHistograms = async () => {
     const source = getDatasetSource();
@@ -590,13 +693,21 @@ const App: React.FC = () => {
     hasRestoredSessionRef.current = true;
     const restoreSession = async () => {
       const savedSettings = readPersistedPlotSettings();
+      const savedUrl = savedSettings?.url || DEFAULT_MEERTIME_NPZ_URL;
+      const savedRemoteCredentials = readRemoteAuthCookie(savedUrl);
       if (savedSettings) {
-        setUrl(savedSettings.url || DEFAULT_MEERTIME_NPZ_URL);
-        setUsername(savedSettings.username || "");
+        setUrl(savedUrl);
+        setUsername(savedRemoteCredentials?.username || savedSettings.username || "");
+        setPassword(savedRemoteCredentials?.password || "");
+        setHasStoredRemoteCredentials(Boolean(savedRemoteCredentials));
+        setShowRemoteCredentialFields(isMeerTimeUrl(savedUrl) && !savedRemoteCredentials);
         setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
         setDatasetOnPulse(savedSettings.datasetOnPulse);
         setStartPhaseAitoff(savedSettings.startPhaseAitoff);
         setEndPhaseAitoff(savedSettings.endPhaseAitoff);
+        setStartPhaseSubpulse(savedSettings.startPhaseSubpulse ?? savedSettings.startPhaseAitoff);
+        setEndPhaseSubpulse(savedSettings.endPhaseSubpulse ?? savedSettings.endPhaseAitoff);
+        setSelectedSubpulseIndex(savedSettings.selectedSubpulseIndex ?? 0);
         setStartPhasePolHist(savedSettings.startPhasePolHist);
         setEndPhasePolHist(savedSettings.endPhasePolHist);
         setStartPhasePolStacks(savedSettings.startPhasePolStacks);
@@ -613,6 +724,9 @@ const App: React.FC = () => {
         setLeftPhaseHist(savedSettings.leftPhaseHist);
         setMidPhaseHist(savedSettings.midPhaseHist);
         setRightPhaseHist(savedSettings.rightPhaseHist);
+      } else {
+        setHasStoredRemoteCredentials(Boolean(savedRemoteCredentials));
+        setShowRemoteCredentialFields(isMeerTimeUrl(savedUrl) && !savedRemoteCredentials);
       }
 
       const savedBlob = await readPersistedDatasetBlob();
@@ -623,6 +737,9 @@ const App: React.FC = () => {
         setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
         setStartPhaseAitoff(savedSettings.startPhaseAitoff);
         setEndPhaseAitoff(savedSettings.endPhaseAitoff);
+        setStartPhaseSubpulse(savedSettings.startPhaseSubpulse ?? savedSettings.startPhaseAitoff);
+        setEndPhaseSubpulse(savedSettings.endPhaseSubpulse ?? savedSettings.endPhaseAitoff);
+        setSelectedSubpulseIndex(savedSettings.selectedSubpulseIndex ?? 0);
         setStartPhasePolHist(savedSettings.startPhasePolHist);
         setEndPhasePolHist(savedSettings.endPhasePolHist);
         setStartPhasePolStacks(savedSettings.startPhasePolStacks);
@@ -645,6 +762,21 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const remoteUrl = url.trim();
+    const savedRemoteCredentials = readRemoteAuthCookie(remoteUrl);
+    setHasStoredRemoteCredentials(Boolean(savedRemoteCredentials));
+
+    if (savedRemoteCredentials) {
+      setUsername(savedRemoteCredentials.username);
+      setPassword(savedRemoteCredentials.password);
+      setShowRemoteCredentialFields(false);
+    } else {
+      setPassword("");
+      setShowRemoteCredentialFields(isMeerTimeUrl(remoteUrl));
+    }
+  }, [url]);
+
+  useEffect(() => {
     if (!file) return;
     persistPlotSettings({
       url,
@@ -653,6 +785,9 @@ const App: React.FC = () => {
       datasetOnPulse,
       startPhaseAitoff,
       endPhaseAitoff,
+      startPhaseSubpulse,
+      endPhaseSubpulse,
+      selectedSubpulseIndex,
       startPhasePolHist,
       endPhasePolHist,
       startPhasePolStacks,
@@ -672,21 +807,12 @@ const App: React.FC = () => {
     });
   }, [
     file, url, username, obsMetadata, datasetOnPulse, startPhaseAitoff, endPhaseAitoff,
+    startPhaseSubpulse, endPhaseSubpulse, selectedSubpulseIndex,
     startPhasePolHist, endPhasePolHist, startPhasePolStacks, endPhasePolStacks,
     startPhasePolarParams, endPhasePolarParams, onPulseStartPolarParams, onPulseEndPolarParams,
     startPhaseProfiles, endPhaseProfiles, startPhaseHeatmaps, endPhaseHeatmaps,
     aitoffPhase, leftPhaseHist, midPhaseHist, rightPhaseHist,
   ]);
-
-  useEffect(() => {
-    if (!file) return;
-    if (isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams)) return;
-    const t = window.setTimeout(
-      () => schedulePlotRequest("polarParams", fetchPolarisationParams),
-      PLOT_REQUEST_DEBOUNCE_MS,
-    );
-    return () => window.clearTimeout(t);
-  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams]);
 
   useEffect(() => {
     if (!file) return;
@@ -708,21 +834,30 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!file) return;
+    if (isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams)) return;
     const t = window.setTimeout(
-      () => schedulePlotRequest("aitoff", fetchPoincareAitoffData),
+      () => schedulePlotRequest("polarParams", fetchPolarisationParams),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, file]);
+  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams]);
 
   useEffect(() => {
     if (!file) return;
+    if (isInvalidRange(startPhaseSubpulse, endPhaseSubpulse)) return;
     const t = window.setTimeout(
-      () => schedulePlotRequest("phaseSlices", fetchPhaseSliceHistograms),
+      () => schedulePlotRequest("subpulseParams", fetchSubpulsePolarisationParams),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist]);
+  }, [
+    file,
+    startPhaseSubpulse,
+    endPhaseSubpulse,
+    selectedSubpulseIndex,
+    datasetOnPulse.start,
+    datasetOnPulse.end,
+  ]);
 
   useEffect(() => {
     if (!file) return;
@@ -742,7 +877,26 @@ const App: React.FC = () => {
     return () => window.clearTimeout(t);
   }, [file, startPhasePolStacks, endPhasePolStacks]);
 
+  useEffect(() => {
+    if (!file) return;
+    const t = window.setTimeout(
+      () => schedulePlotRequest("phaseSlices", fetchPhaseSliceHistograms),
+      PLOT_REQUEST_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist]);
+
+  useEffect(() => {
+    if (!file) return;
+    const t = window.setTimeout(
+      () => schedulePlotRequest("aitoff", fetchPoincareAitoffData),
+      PLOT_REQUEST_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, file]);
+
   const polarParamsState = getCombinedPlotState("polarParams");
+  const subpulseParamsState = getCombinedPlotState("subpulseParams");
   const profilesState = getCombinedPlotState("profiles", "heatmaps");
   const stacksState = getCombinedPlotState("polarStacks");
   const histogramsState = getCombinedPlotState("polarHistograms");
@@ -753,7 +907,61 @@ const App: React.FC = () => {
   const queuedPlotCount = Object.values(plotRequestStates).filter(state => state.status === "queued").length;
   const stacksRangeInvalid = isInvalidRange(startPhasePolStacks, endPhasePolStacks);
   const histogramsRangeInvalid = isInvalidRange(startPhasePolHist, endPhasePolHist);
+  const subpulseRangeInvalid = isInvalidRange(startPhaseSubpulse, endPhaseSubpulse);
   const phaseSlicesRangeInvalid = leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist;
+  const totalSubpulses = Number(subpulsePolarParamsData?.num_pulses ?? polarParamsData?.num_pulses ?? 0);
+  const isMeerTimeLink = isMeerTimeUrl(url.trim());
+  const shouldOfferRemoteCredentials = isMeerTimeLink || hasStoredRemoteCredentials || showRemoteCredentialFields;
+  const shouldShowRemoteCredentialFields = shouldOfferRemoteCredentials && (!hasStoredRemoteCredentials || showRemoteCredentialFields);
+  const profilesPlotThemeIsDark = useStaggeredThemeValue(isDark, 80);
+  const polarParamsPlotThemeIsDark = useStaggeredThemeValue(isDark, 160);
+  const subpulsePlotThemeIsDark = useStaggeredThemeValue(isDark, 240);
+  const histogramsPlotThemeIsDark = useStaggeredThemeValue(isDark, 320);
+  const stacksPlotThemeIsDark = useStaggeredThemeValue(isDark, 400);
+  const phaseSlicesPlotThemeIsDark = useStaggeredThemeValue(isDark, 480);
+  const aitoffPlotThemeIsDark = useStaggeredThemeValue(isDark, 560);
+
+  const handleChangeRemoteCredentials = () => {
+    const savedRemoteCredentials = readRemoteAuthCookie(url.trim());
+    if (savedRemoteCredentials) {
+      setUsername(savedRemoteCredentials.username);
+      setPassword(savedRemoteCredentials.password);
+    }
+    setShowRemoteCredentialFields(true);
+  };
+
+  const handleForgetRemoteCredentials = () => {
+    clearRemoteAuthCookie(url.trim());
+    setHasStoredRemoteCredentials(false);
+    setShowRemoteCredentialFields(isMeerTimeLink);
+    setUsername("");
+    setPassword("");
+  };
+
+  const applyThemeImmediately = (nextIsDark: boolean) => {
+    try {
+      const root = document.documentElement;
+      if (themeSwitchCleanupRef.current !== null) {
+        window.clearTimeout(themeSwitchCleanupRef.current);
+      }
+      root.classList.add("theme-switching");
+      root.classList.toggle("dark", nextIsDark);
+      localStorage.setItem("theme", nextIsDark ? "dark" : "light");
+      window.dispatchEvent(new CustomEvent("theme-toggle", { detail: { dark: nextIsDark } }));
+      themeSwitchCleanupRef.current = window.setTimeout(() => {
+        root.classList.remove("theme-switching");
+        themeSwitchCleanupRef.current = null;
+      }, 360);
+    } catch {
+      // Theme feedback is best-effort; React state remains the source of truth.
+    }
+  };
+
+  const handleToggleTheme = () => {
+    const nextIsDark = !document.documentElement.classList.contains("dark");
+    applyThemeImmediately(nextIsDark);
+    setIsDark(nextIsDark);
+  };
 
   return (
     <div className="min-h-screen w-full flex flex-col">
@@ -779,7 +987,7 @@ const App: React.FC = () => {
             </Button> */}
             <button
               type="button"
-              onClick={() => setIsDark(d => !d)}
+              onClick={handleToggleTheme}
               className={`theme-orbit-toggle ${isDark ? "is-dark" : "is-light"}`}
               aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
               title={isDark ? "Switch to light mode" : "Switch to dark mode"}
@@ -909,33 +1117,54 @@ const App: React.FC = () => {
                     <Input className="field-shell" type="text" placeholder="File URL" value={url} onChange={e => setUrl(e.target.value)} />
                   </div>
 
-                  <div className="flex flex-col gap-3">
-                    <div>
-                      <Label className="form-label text-foreground">Username</Label>
-                      <Input className="field-shell" type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+                  {shouldOfferRemoteCredentials && (
+                    <div className="flex flex-col gap-3">
+                      {shouldShowRemoteCredentialFields ? (
+                        <>
+                          <div>
+                            <Label className="form-label text-foreground">Username</Label>
+                            <Input className="field-shell" type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+                          </div>
+                          <div>
+                            <Label className="form-label text-foreground">Password</Label>
+                            <div className="relative">
+                              <Input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Password"
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                className="field-shell pr-12"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowPassword(current => !current)}
+                                className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-foreground hover:bg-muted"
+                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                title={showPassword ? "Hide password" : "Show password"}
+                              >
+                                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-sm text-foreground sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="font-medium">Using saved URL credentials</div>
+                            <div className="truncate text-muted-foreground">{username}</div>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <Button type="button" variant="ghost" size="sm" onClick={handleChangeRemoteCredentials}>
+                              Change
+                            </Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={handleForgetRemoteCredentials}>
+                              Forget
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <Label className="form-label text-foreground">Password</Label>
-                      <div className="relative">
-                        <Input
-                          type={showPassword ? "text" : "password"}
-                          placeholder="Password"
-                          value={password}
-                          onChange={e => setPassword(e.target.value)}
-                          className="field-shell pr-12"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(current => !current)}
-                          className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-foreground hover:bg-muted"
-                          aria-label={showPassword ? "Hide password" : "Show password"}
-                          title={showPassword ? "Hide password" : "Show password"}
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  )}
 
                   <div className="flex justify-end gap-2 pt-1">
                     <Button onClick={handleLoadFromUrl} variant="outline" disabled={isPreparingInput} className="load-action-button hover:text-foreground">
@@ -962,6 +1191,64 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-8">
+              {/* Profiles + Heatmaps (integrated) */}
+              <section className="scientific-section section-plain">
+                    <div className="section-heading-row">
+                      <h2 className="section-title">Waterfall profiles and integrated heatmaps</h2>
+                      <PlotStatusBadge state={profilesState} />
+                    </div>
+                    {obsMetadata && (
+                      <div className="section-metadata">
+                        <div>Obs ID: {obsMetadata.obsId}</div>
+                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
+                      <div>
+                        <Label className="form-label text-muted-foreground">Start Phase</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          value={startPhaseProfiles}
+                          onChange={e => setStartPhaseProfiles(Number(e.target.value))}
+                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                        />
+                      </div>
+                      <div>
+                        <Label className="form-label text-muted-foreground">End Phase</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          value={endPhaseProfiles}
+                          onChange={e => setEndPhaseProfiles(Number(e.target.value))}
+                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                        />
+                      </div>
+                    </div>
+                    {isInvalidRange(startPhaseProfiles, endPhaseProfiles) && (
+                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
+                    )}
+                    <div className="mt-4 w-full">
+                      <PlotResultSlot state={profilesState} label="Waterfall profiles and heatmaps" hasData={!!profilesData} deferUntilVisible placeholderMinHeight="32rem">
+                        <ErrorBoundary>
+                          {profilesData && (
+                            <WaterfallProfiles
+                              data={profilesData}
+                              heatmaps={heatmapsData}
+                              startPhase={startPhaseProfiles}
+                              endPhase={endPhaseProfiles}
+                              isDark={profilesPlotThemeIsDark}
+                            />
+                          )}
+                        </ErrorBoundary>
+                      </PlotResultSlot>
+                    </div>
+              </section>
+
               {/* Polarisation parameters + Poincare dual view */}
               <section className="scientific-section section-plain">
                     <div className="section-heading-row">
@@ -1012,29 +1299,119 @@ const App: React.FC = () => {
                       <div className="validation-note text-red-600 mt-1">Ensure start &lt;= end for the on-pulse window.</div>
                     )}
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={polarParamsState} label="Polarisation parameters" hasData={!!polarParamsData?.dataset?.length}>
+                      <PlotResultSlot state={polarParamsState} label="Polarisation parameters" hasData={!!polarParamsData?.dataset?.length} deferUntilVisible placeholderMinHeight="40rem">
                         <ErrorBoundary>
                           {polarParamsData?.dataset?.length ? (() => {
                             const integrated = polarParamsData.dataset[0];
                             const phaseAxis = polarParamsData.phase_axis ?? [];
                             if (!integrated || !phaseAxis.length) return null;
                             return (
-                              <PolarisationDualView
+                              <>
+                                <PolarisationDualView
+                                  phaseAxis={phaseAxis}
+                                  data={{
+                                    PA: integrated.PA ?? [],
+                                    EA: integrated.EA ?? [],
+                                    x: integrated.x ?? [],
+                                    y: integrated.y ?? [],
+                                    z: integrated.z ?? [],
+                                    p_frac: integrated.p_frac ?? [],
+                                    l_frac: integrated.l_frac ?? [],
+                                    v_frac: integrated.v_frac ?? [],
+                                    absv_frac: integrated.absv_frac ?? [],
+                                  }}
+                                  isDark={polarParamsPlotThemeIsDark}
+                                  startPhase={startPhaseAitoff}
+                                  endPhase={endPhaseAitoff}
+                                />
+                                <RadiusOfCurvaturePlot
+                                  phaseAxis={phaseAxis}
+                                  radius={integrated.radius_of_curvature ?? []}
+                                  isDark={polarParamsPlotThemeIsDark}
+                                />
+                              </>
+                            );
+                          })() : null}
+                        </ErrorBoundary>
+                      </PlotResultSlot>
+                    </div>
+              </section>
+
+              {/* Selected subpulse Poincare and polarisation parameters */}
+              <section className="scientific-section section-plain">
+                    <div className="section-heading-row">
+                      <h2 className="section-title">Selected subpulse Poincare sphere and polarisation parameters</h2>
+                      <PlotStatusBadge state={subpulseParamsState} />
+                    </div>
+                    {obsMetadata && (
+                      <div className="section-metadata">
+                        <div>Obs ID: {obsMetadata.obsId}</div>
+                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-2 items-end mt-2">
+                      <div>
+                        <Label className="form-label text-muted-foreground">Start phase</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          value={startPhaseSubpulse}
+                          onChange={e => {
+                            setStartPhaseSubpulse(Number(e.target.value));
+                            setSubpulsePolarParamsData(null);
+                          }}
+                          className={subpulseRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                        />
+                      </div>
+                      <div>
+                        <Label className="form-label text-muted-foreground">End phase</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          value={endPhaseSubpulse}
+                          onChange={e => {
+                            setEndPhaseSubpulse(Number(e.target.value));
+                            setSubpulsePolarParamsData(null);
+                          }}
+                          className={subpulseRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                        />
+                      </div>
+                      <div>
+                        <Label className="form-label text-muted-foreground">Pulse index</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={totalSubpulses > 0 ? Math.max(0, totalSubpulses - 1) : undefined}
+                          step={1}
+                          value={selectedSubpulseIndex}
+                          onChange={e => {
+                            const nextIndex = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                            setSelectedSubpulseIndex(nextIndex);
+                            setSubpulsePolarParamsData(null);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {subpulseRangeInvalid && (
+                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
+                    )}
+                    <div className="mt-4 w-full">
+                      <PlotResultSlot state={subpulseParamsState} label="Selected subpulse polarisation" hasData={!!subpulsePolarParamsData?.dataset?.length} deferUntilVisible placeholderMinHeight="40rem">
+                        <ErrorBoundary>
+                          {subpulsePolarParamsData?.dataset?.length ? (() => {
+                            const selectedSubpulse = subpulsePolarParamsData.dataset[0];
+                            const phaseAxis = subpulsePolarParamsData.phase_axis ?? [];
+                            if (!selectedSubpulse || !phaseAxis.length) return null;
+                            return (
+                              <SubpulsePolarisationView
                                 phaseAxis={phaseAxis}
-                                data={{
-                                  PA: integrated.PA ?? [],
-                                  EA: integrated.EA ?? [],
-                                  x: integrated.x ?? [],
-                                  y: integrated.y ?? [],
-                                  z: integrated.z ?? [],
-                                  p_frac: integrated.p_frac ?? [],
-                                  l_frac: integrated.l_frac ?? [],
-                                  v_frac: integrated.v_frac ?? [],
-                                  absv_frac: integrated.absv_frac ?? [],
-                                }}
-                                isDark={isDark}
-                                startPhase={startPhaseAitoff}
-                                endPhase={endPhaseAitoff}
+                                data={selectedSubpulse}
+                                selectedPulseIndex={selectedSubpulseIndex}
+                                isDark={subpulsePlotThemeIsDark}
                               />
                             );
                           })() : null}
@@ -1043,11 +1420,11 @@ const App: React.FC = () => {
                     </div>
               </section>
 
-              {/* Profiles + Heatmaps (integrated) */}
+              {/* Polarisation histograms (2D) */}
               <section className="scientific-section section-plain">
                     <div className="section-heading-row">
-                      <h2 className="section-title">Waterfall profiles and integrated heatmaps</h2>
-                      <PlotStatusBadge state={profilesState} />
+                      <h2 className="section-title">Phase-resolved polarisation histograms</h2>
+                      <PlotStatusBadge state={histogramsState} />
                     </div>
                     {obsMetadata && (
                       <div className="section-metadata">
@@ -1057,44 +1434,50 @@ const App: React.FC = () => {
                     )}
                     <div className="grid grid-cols-2 gap-2 items-end mt-2">
                       <div>
-                        <Label className="form-label text-muted-foreground">Start Phase</Label>
+                        <Label className="form-label text-muted-foreground">Start phase</Label>
                         <Input
                           type="number"
                           min={0}
                           max={1}
                           step={0.001}
-                          value={startPhaseProfiles}
-                          onChange={e => setStartPhaseProfiles(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          value={startPhasePolHist}
+                          onChange={e => {
+                            setStartPhasePolHist(Number(e.target.value));
+                            setPolHistogramData(null);
+                          }}
+                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                       <div>
-                        <Label className="form-label text-muted-foreground">End Phase</Label>
+                        <Label className="form-label text-muted-foreground">End phase</Label>
                         <Input
                           type="number"
                           min={0}
                           max={1}
                           step={0.001}
-                          value={endPhaseProfiles}
-                          onChange={e => setEndPhaseProfiles(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          value={endPhasePolHist}
+                          onChange={e => {
+                            setEndPhasePolHist(Number(e.target.value));
+                            setPolHistogramData(null);
+                          }}
+                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
                         />
                       </div>
                     </div>
-                    {isInvalidRange(startPhaseProfiles, endPhaseProfiles) && (
+                    {histogramsRangeInvalid && (
                       <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={profilesState} label="Waterfall profiles and heatmaps" hasData={!!profilesData}>
+                      <PlotResultSlot state={histogramsState} label="Phase-resolved polarisation histograms" hasData={!!polHistogramData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
-                          {profilesData && (
-                            <WaterfallProfiles
-                              data={profilesData}
-                              heatmaps={heatmapsData}
-                              startPhase={startPhaseProfiles}
-                              endPhase={endPhaseProfiles}
-                              isDark={isDark}
-                            />
+                          {polHistogramData && (
+                            <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
+                              {POLARISATION_QUANTITIES.map(q => (
+                                <div key={q}>
+                                  <SinglePolarisationHistogram data={polHistogramData[q]} isDark={histogramsPlotThemeIsDark} />
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>
@@ -1149,74 +1532,10 @@ const App: React.FC = () => {
                       <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
                     )}
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={stacksState} label="Polarisation stacks" hasData={!!polStacksData}>
+                      <PlotResultSlot state={stacksState} label="Polarisation stacks" hasData={!!polStacksData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
                           {polStacksData && (
-                            <PolarisationStacks data={polStacksData} isDark={isDark} />
-                          )}
-                        </ErrorBoundary>
-                      </PlotResultSlot>
-                    </div>
-              </section>
-
-              {/* Polarisation histograms (2D) */}
-              <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Phase-resolved polarisation histograms</h2>
-                      <PlotStatusBadge state={histogramsState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Start phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhasePolHist}
-                          onChange={e => {
-                            setStartPhasePolHist(Number(e.target.value));
-                            setPolHistogramData(null);
-                          }}
-                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">End phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhasePolHist}
-                          onChange={e => {
-                            setEndPhasePolHist(Number(e.target.value));
-                            setPolHistogramData(null);
-                          }}
-                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                    </div>
-                    {histogramsRangeInvalid && (
-                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
-                    )}
-                    <div className="mt-4 w-full">
-                      <PlotResultSlot state={histogramsState} label="Phase-resolved polarisation histograms" hasData={!!polHistogramData}>
-                        <ErrorBoundary>
-                          {polHistogramData && (
-                            <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
-                              {POLARISATION_QUANTITIES.map(q => (
-                                <div key={q}>
-                                  <SinglePolarisationHistogram data={polHistogramData[q]} isDark={isDark} />
-                                </div>
-                              ))}
-                            </div>
+                            <PolarisationStacks data={polStacksData} isDark={stacksPlotThemeIsDark} />
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>
@@ -1286,12 +1605,12 @@ const App: React.FC = () => {
                       <div className="validation-note text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
                     )}
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={phaseSlicesState} label="Phase-slice histograms" hasData={!!phaseHistogramData}>
+                      <PlotResultSlot state={phaseSlicesState} label="Phase-slice histograms" hasData={!!phaseHistogramData} deferUntilVisible placeholderMinHeight="30rem">
                         <ErrorBoundary>
                           {phaseHistogramData && (
                             <PhaseSliceHistograms
                               data={phaseHistogramData}
-                              isDark={isDark}
+                              isDark={phaseSlicesPlotThemeIsDark}
                               phaseWindow={{ left: leftPhaseHist, mid: midPhaseHist, right: rightPhaseHist }}
                             />
                           )}
@@ -1346,10 +1665,10 @@ const App: React.FC = () => {
                       <div className="validation-note text-red-600 mt-1">On-pulse start must be &lt;= end.</div>
                     )}
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!poincareAitoffData}>
+                      <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!poincareAitoffData} deferUntilVisible placeholderMinHeight="32rem">
                         <ErrorBoundary>
                           {poincareAitoffData && (
-                            <PoincareAitoffView data={poincareAitoffData} phaseValue={aitoffPhase} isDark={isDark} />
+                            <PoincareAitoffView data={poincareAitoffData} phaseValue={aitoffPhase} isDark={aitoffPlotThemeIsDark} />
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>

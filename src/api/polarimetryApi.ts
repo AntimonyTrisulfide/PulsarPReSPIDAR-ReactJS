@@ -1,3 +1,5 @@
+import { readPlotResponseCache, writePlotResponseCache } from "@/lib/plotResponseCache";
+
 export const DEFAULT_MEERTIME_NPZ_URL =
   "https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz";
 
@@ -28,9 +30,14 @@ const API_BASE_URL = (
     : NORMALIZED_CONFIGURED_API_BASE_URL || DEFAULT_API_BASE_URL
 ).replace(/\/$/, "");
 const CONFIGURED_MEERTIME_PROXY_URL = import.meta.env.VITE_MEERTIME_PROXY_URL?.trim();
-const MEERTIME_PROXY_URL = (CONFIGURED_MEERTIME_PROXY_URL || "/api/meertime-proxy").replace(/\/$/, "");
+const MEERTIME_PROXY_URL = (CONFIGURED_MEERTIME_PROXY_URL || `${API_BASE_URL}/meertime-proxy`).replace(/\/$/, "");
 const MEERTIME_HOST = "psrweb.jb.man.ac.uk";
 const PLOTS_MARKER = "/plots/";
+
+export type RemoteAuthCredentials = {
+  username: string;
+  password: string;
+};
 
 export type PhaseRange = {
   start: number;
@@ -69,6 +76,14 @@ export function isInvalidPhaseRange(start: number, end: number) {
   return start > end;
 }
 
+export function isMeerTimeUrl(url: string) {
+  try {
+    return new URL(url).host === MEERTIME_HOST;
+  } catch {
+    return false;
+  }
+}
+
 function buildApiUrl(path: string, params?: URLSearchParams) {
   return params ? `${API_BASE_URL}${path}?${params.toString()}` : `${API_BASE_URL}${path}`;
 }
@@ -77,13 +92,29 @@ function isPreparedDatasetSource(source: DatasetSource): source is PreparedDatas
   return typeof source === "object" && "dataKey" in source;
 }
 
+function buildPlotResponseCacheKey(path: string, params: URLSearchParams) {
+  const sortedParams = Array.from(params.entries())
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => (
+      leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey)
+    ));
+  return `${path}?${new URLSearchParams(sortedParams).toString()}`;
+}
+
 async function postDatasetJson<T>(path: string, source: DatasetSource, params: URLSearchParams): Promise<T> {
   const formData = new FormData();
+  let cacheKey: string | null = null;
   if (isPreparedDatasetSource(source)) {
     params.set("data_key", source.dataKey);
+    cacheKey = buildPlotResponseCacheKey(path, params);
   } else {
     formData.append("file", source);
   }
+
+  if (cacheKey) {
+    const cached = await readPlotResponseCache<T>(cacheKey);
+    if (cached.hit) return cached.value;
+  }
+
   const requestUrl = buildApiUrl(path, params);
 
   const response = await fetch(requestUrl, {
@@ -100,7 +131,11 @@ async function postDatasetJson<T>(path: string, source: DatasetSource, params: U
     throw new Error(`Request failed: ${path} (${response.status}) via ${requestUrl}`);
   }
 
-  return response.json() as Promise<T>;
+  const payload = await response.json() as T;
+  if (cacheKey) {
+    writePlotResponseCache(cacheKey, payload);
+  }
+  return payload;
 }
 
 export async function prepareDataset(file: File | Blob, onPulse: PhaseRange): Promise<PreparedDatasetResult> {
@@ -262,17 +297,29 @@ export async function fetchPolarisationStacks(
   return aggregate;
 }
 
-export async function fetchPolarisationParams(source: DatasetSource, phaseRange: PhaseRange, onPulse: PhaseRange, maxPulses = 0) {
+export async function fetchPolarisationParams(
+  source: DatasetSource,
+  phaseRange: PhaseRange,
+  onPulse: PhaseRange,
+  maxPulses = 0,
+  pulseIndex?: number,
+) {
+  const params = new URLSearchParams({
+    start_phase: String(phaseRange.start),
+    end_phase: String(phaseRange.end),
+    on_pulse_start: String(onPulse.start),
+    on_pulse_end: String(onPulse.end),
+    max_pulses: String(maxPulses),
+  });
+
+  if (pulseIndex !== undefined) {
+    params.set("pulse_index", String(pulseIndex));
+  }
+
   return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationParams,
     source,
-    new URLSearchParams({
-      start_phase: String(phaseRange.start),
-      end_phase: String(phaseRange.end),
-      on_pulse_start: String(onPulse.start),
-      on_pulse_end: String(onPulse.end),
-      max_pulses: String(maxPulses),
-    }),
+    params,
   );
 }
 
@@ -359,10 +406,6 @@ function resolveRemoteFetchUrl(url: string) {
     const parsed = new URL(url);
     if (parsed.host !== MEERTIME_HOST) return url;
 
-    if (import.meta.env.DEV) {
-      return url.replace(/^https?:\/\/[^/]+/, "/api");
-    }
-
     return `${MEERTIME_PROXY_URL}?${new URLSearchParams({ url }).toString()}`;
   } catch {
     return url;
@@ -401,16 +444,25 @@ function metadataFromPipeline(url: string, pipelineInfo: Record<string, any>): O
   };
 }
 
-export async function loadRemoteNpz(url: string, username: string, password: string): Promise<RemoteFileLoadResult> {
+function getRemoteRequestInit(credentials?: RemoteAuthCredentials): RequestInit | undefined {
+  if (!credentials?.username || !credentials.password) return undefined;
+  return {
+    headers: {
+      Authorization: "Basic " + btoa(credentials.username + ":" + credentials.password),
+    },
+  };
+}
+
+export async function loadRemoteNpz(url: string, credentials?: RemoteAuthCredentials): Promise<RemoteFileLoadResult> {
   const fetchUrl = resolveRemoteFetchUrl(url);
-  const authHeader = { Authorization: "Basic " + btoa(username + ":" + password) };
+  const requestInit = getRemoteRequestInit(credentials);
   const onPulse = { start: 0, end: 1, mid: 0.5 };
   let pipelineJson: Record<string, any> | null = null;
 
   const pipelineInfoUrl = getPipelineInfoUrl(url);
   if (pipelineInfoUrl) {
     try {
-      const pipelineRes = await fetch(resolveRemoteFetchUrl(pipelineInfoUrl), { headers: authHeader });
+      const pipelineRes = await fetch(resolveRemoteFetchUrl(pipelineInfoUrl), requestInit);
       if (pipelineRes.ok) {
         pipelineJson = await pipelineRes.json();
         const candidate = pipelineJson?.windows?.on?.[0];
@@ -429,7 +481,7 @@ export async function loadRemoteNpz(url: string, username: string, password: str
     }
   }
 
-  const response = await fetch(fetchUrl, { headers: authHeader });
+  const response = await fetch(fetchUrl, requestInit);
   if (!response.ok) {
     throw new Error(`Failed to fetch file (${response.status}) via ${fetchUrl}`);
   }

@@ -1,5 +1,15 @@
 # React + TypeScript + Vite
 
+## Deployment configuration
+
+Set `VITE_API_BASE_URL` to the FastAPI backend base URL. MeerTime file requests are proxied through `${VITE_API_BASE_URL}/meertime-proxy` by default, so non-Vercel deployments do not need a Vercel `/api` function.
+
+If the frontend and backend are hosted on different origins, add the frontend origin to the FastAPI backend with `CORS_ALLOWED_ORIGINS`, for example:
+
+```bash
+CORS_ALLOWED_ORIGINS=https://your-frontend.example.com
+```
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

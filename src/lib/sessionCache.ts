@@ -9,6 +9,9 @@ export type PersistedPlotSettings = {
   datasetOnPulse: { start: number; end: number };
   startPhaseAitoff: number;
   endPhaseAitoff: number;
+  startPhaseSubpulse: number;
+  endPhaseSubpulse: number;
+  selectedSubpulseIndex: number;
   startPhasePolHist: number;
   endPhasePolHist: number;
   startPhasePolStacks: number;

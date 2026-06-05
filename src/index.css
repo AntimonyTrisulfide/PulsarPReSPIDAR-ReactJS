@@ -74,7 +74,35 @@
     -webkit-font-smoothing: antialiased;
     font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     position: relative;
-    transition: background-color 240ms ease, color 240ms ease;
+    isolation: isolate;
+    transition: color 260ms ease;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at top left, hsl(0 0% 9% / 0.2), transparent 22%),
+      linear-gradient(180deg, hsl(0 0% 3%), hsl(0 0% 2%));
+    opacity: 0;
+    transition: opacity 320ms ease;
+  }
+
+  .dark body::before {
+    opacity: 1;
+  }
+
+  .theme-switching body::before {
+    will-change: opacity;
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
   }
 
   ::selection {
@@ -239,6 +267,28 @@
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
   }
 
+  .page-shell,
+  .page-hero,
+  .control-slab,
+  .section-card,
+  .scientific-section,
+  .scientific-divider,
+  .plot-export-scope,
+  .histogram-panel,
+  .plot-frame,
+  .plot-loading-panel,
+  .plot-deferred-panel,
+  [data-slot="card"],
+  [data-slot="input"],
+  select,
+  textarea {
+    transition:
+      background-color 260ms ease,
+      border-color 260ms ease,
+      color 220ms ease,
+      box-shadow 260ms ease;
+  }
+
   .section-plain {
     border: 0;
     border-radius: 0;
@@ -258,9 +308,9 @@
   }
 
   .scientific-section:first-child {
-    border-top: 0;
-    padding-top: 0;
-    margin-top: 0;
+    border-top: 1px solid hsl(0 0% 0%);
+    padding-top: 2rem;
+    margin-top: 1.5rem;
   }
 
   .scientific-section-header {
@@ -363,6 +413,18 @@
     justify-content: space-between;
     gap: 0.75rem;
     margin-bottom: 0.5rem;
+  }
+
+  .plot-deferred-panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.85rem;
+    border: 1px dashed hsl(var(--border));
+    border-radius: var(--radius);
+    background: hsl(var(--muted) / 0.3);
+    color: hsl(var(--muted-foreground));
+    text-align: left;
   }
 
   .plot-toolbar {
@@ -516,6 +578,42 @@
   }
 
   .theme-orbit-toggle.is-light .theme-pulsar-beam {
+    opacity: 0.95;
+  }
+
+  :root.dark .theme-orbit-toggle .theme-orbit-core {
+    transform: translate(2.64rem, -50%);
+    background: linear-gradient(180deg, hsl(217 28% 26%), hsl(222 36% 16%));
+    box-shadow: 0 6px 20px hsl(210 80% 62% / 0.22);
+  }
+
+  :root:not(.dark) .theme-orbit-toggle .theme-orbit-core {
+    transform: translate(0, -50%);
+    background: linear-gradient(180deg, hsl(0 0% 100%), hsl(210 16% 88%));
+    box-shadow: 0 6px 18px hsl(210 40% 40% / 0.18);
+  }
+
+  :root.dark .theme-orbit-toggle .theme-pulsar-star {
+    background: hsl(284 82% 66%);
+    border-color: hsl(0 0% 85%);
+    box-shadow:
+      0 0 0 0.14rem hsl(284 78% 62% / 0.24),
+      0 0 16px hsl(284 84% 62% / 0.58);
+  }
+
+  :root:not(.dark) .theme-orbit-toggle .theme-pulsar-star {
+    background: hsl(284 78% 62%);
+    border-color: hsl(0 0% 10%);
+    box-shadow:
+      0 0 0 0.14rem hsl(284 78% 62% / 0.22),
+      0 0 14px hsl(284 84% 62% / 0.48);
+  }
+
+  :root.dark .theme-orbit-toggle .theme-pulsar-beam {
+    opacity: 0;
+  }
+
+  :root:not(.dark) .theme-orbit-toggle .theme-pulsar-beam {
     opacity: 0.95;
   }
 
@@ -728,10 +826,13 @@
     font-weight: 600;
   }
 
+  .plot-export-scope,
   .histogram-panel {
     border-top: 1px solid hsl(0 0% 0%);
+    padding-top: var(--plot-separator-gap, 0.9rem);
   }
 
+  .dark .plot-export-scope,
   .dark .histogram-panel {
     border-top-color: hsl(0 0% 100%);
   }
@@ -988,12 +1089,6 @@
     .split-resizer {
       display: none;
     }
-  }
-
-  .dark body {
-    background:
-      radial-gradient(circle at top left, hsl(0 0% 9% / 0.2), transparent 22%),
-      linear-gradient(180deg, hsl(var(--background)), hsl(0 0% 2%));
   }
 
   .dark .control-slab,

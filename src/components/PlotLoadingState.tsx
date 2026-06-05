@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Gauge } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,8 +22,10 @@ type QueueStatusSummaryProps = {
 type PlotResultSlotProps = {
   children: ReactNode;
   className?: string;
+  deferUntilVisible?: boolean;
   hasData: boolean;
   label: string;
+  placeholderMinHeight?: number | string;
   state: PlotRequestViewState;
 };
 
@@ -58,15 +60,71 @@ export function QueueStatusSummary({ concurrency, queuedCount, runningCount }: Q
   );
 }
 
-export function PlotResultSlot({ children, className, hasData, label, state }: PlotResultSlotProps) {
+export function PlotResultSlot({ children, className, deferUntilVisible = false, hasData, label, placeholderMinHeight = "24rem", state }: PlotResultSlotProps) {
   const isBusy = state.status === "queued" || state.status === "running";
+  const shouldDefer = deferUntilVisible && hasData;
+  const { ref, shouldRender } = useVisibilityGate(shouldDefer);
 
   if (!hasData && state.status === "idle") return null;
 
   return (
-    <div className={cn("plot-result-slot", className)}>
-      {hasData ? children : <PlotLoadingPanel label={label} state={state} />}
+    <div ref={ref} className={cn("plot-result-slot", className)}>
+      {hasData
+        ? shouldRender
+          ? children
+          : <PlotDeferredPanel label={label} minHeight={placeholderMinHeight} />
+        : <PlotLoadingPanel label={label} state={state} />}
       {hasData && isBusy && <div className="plot-refresh-progress" aria-hidden="true" />}
+    </div>
+  );
+}
+
+function useVisibilityGate(enabled: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shouldRender, setShouldRender] = useState(!enabled);
+
+  useEffect(() => {
+    if (!enabled) {
+      setShouldRender(true);
+      return;
+    }
+
+    setShouldRender(false);
+    const node = ref.current;
+    if (!node || typeof window === "undefined" || !("IntersectionObserver" in window)) {
+      setShouldRender(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "640px 0px" },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [enabled]);
+
+  return { ref, shouldRender };
+}
+
+function PlotDeferredPanel({ label, minHeight }: { label: string; minHeight: number | string }) {
+  const style: CSSProperties = {
+    minHeight: typeof minHeight === "number" ? `${minHeight}px` : minHeight,
+  };
+
+  return (
+    <div className="plot-deferred-panel" style={style}>
+      <MiniPulsar className="plot-mini-pulsar" />
+      <div>
+        <div className="plot-loading-title">Plot ready</div>
+        <div className="plot-loading-message">{label} will render when this section enters view.</div>
+      </div>
     </div>
   );
 }

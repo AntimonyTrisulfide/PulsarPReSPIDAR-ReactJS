@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useCallback, useRef, memo, useTransition, useId, type CSSProperties } from "react";
 import Plot from "react-plotly.js";
+import Plotly from "plotly.js/dist/plotly";
 import { geoGraticule, geoPath, scaleLinear, select } from "d3";
 import { geoAitoff } from "d3-geo-projection";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
@@ -9,9 +10,11 @@ import { lockCartesianInteractions, paperPlotConfig, type PlotExportFormat } fro
 import { PLOT_AXIS_TITLE_SIZE, PLOT_TICK_FONT_SIZE, plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 import { downloadSvgFromScope } from "@/shared/plot/svgExport";
 import { useElementSize } from "@/shared/plot/useElementSize";
+import { RED_TO_RED_COLOR_SCALE, redToRedPhaseColor } from "@/shared/plot/phaseColorScale";
 
 // Memoized Plot component to prevent unnecessary re-renders
 const MemoizedPlot = memo(Plot);
+const MAX_RADIAL_PATH_TRACES = 48;
 
 // Separate memoized component for custom XY plot
 interface CustomXYPlotProps {
@@ -496,15 +499,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     marker: {
       size: 4,
       color: markerColors,
-      colorscale: [
-        [0, "#ff0000"],
-        [1 / 6, "#ffff00"],
-        [2 / 6, "#00ff00"],
-        [3 / 6, "#00ffff"],
-        [4 / 6, "#0000ff"],
-        [5 / 6, "#ff00ff"],
-        [1, "#ff0000"],
-      ],
+      colorscale: RED_TO_RED_COLOR_SCALE as any,
       cmin: startPhase,
       cmax: endPhase,
       showscale: true,
@@ -520,7 +515,13 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     },
     hovertemplate: "Q %{x:.2f}<br>U %{y:.2f}<br>V %{z:.2f}<extra></extra>",
     name: "Poincare points",
+    showlegend: false,
   }), [data.x, data.y, data.z, startPhase, endPhase, markerColors]);
+
+  const radialPathTraces = useMemo(
+    () => makeRadialPathTraces(data.x, data.y, data.z, markerColors, startPhase, endPhase),
+    [data.x, data.y, data.z, markerColors, startPhase, endPhase],
+  );
 
   const layout3d = useMemo(() => ({
     title: undefined,
@@ -536,6 +537,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
     paper_bgcolor: paperBg,
     plot_bgcolor: plotBg,
     font: plotFont(axisColor),
+    showlegend: false,
   }), [axisColor, gridColor, paperBg, plotBg, themeIsDark]);
 
   useEffect(() => {
@@ -750,10 +752,13 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
 
   const dispatchResize = useCallback((force = false) => {
     const now = performance.now();
-    if (!force && now - lastResizeTs.current < 48) return;
+    if (!force && now - lastResizeTs.current < 16) return;
     lastResizeTs.current = now;
     if (resizeEventRaf.current !== null) return;
     resizeEventRaf.current = requestAnimationFrame(() => {
+      splitContainerRef.current?.querySelectorAll<HTMLElement>(".plotly-graph-div").forEach(graphDiv => {
+        void Plotly.Plots.resize(graphDiv as any);
+      });
       window.dispatchEvent(new Event("resize"));
       resizeEventRaf.current = null;
     });
@@ -864,11 +869,11 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
       ) : (
         <MemoizedPlot
           key="poincare-3d"
-          data={[sphere3d, points3d]}
+          data={[sphere3d, ...radialPathTraces, points3d]}
           layout={{ ...layout3d, dragmode: "orbit" }}
           config={paperPlotConfig("poincare-dual-view", { interactive: true })}
           useResizeHandler
-          style={{ width: "100%", height: "100%" }}
+          style={{ width: "100%", height: "calc(100% - 2.75rem)" }}
         />
       )}
     </div>
@@ -881,7 +886,15 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
         <PlotExportButtons filename="polarisation-fractions-angles" />
         <div className="plot-panel-title text-foreground">Polarization Fractions and Angles</div>
       </div>
-      <div className="mb-3 flex flex-wrap gap-3 text-sm font-semibold text-foreground">
+      <MemoizedPlot
+        key={`fractions`}
+        data={[...fractionTraces, ...angleTraces]}
+        layout={fractionsLayout}
+        config={paperPlotConfig("polarisation-fractions-angles")}
+        useResizeHandler
+        style={{ width: "100%", height: "calc(100% - 8rem)" }}
+      />
+      <div className="mt-4 flex flex-wrap justify-center gap-3 text-sm font-semibold text-foreground">
         {[
           ["p_frac", "P/I"],
           ["l_frac", "L/I"],
@@ -896,14 +909,6 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
           </label>
         ))}
       </div>
-      <MemoizedPlot
-        key={`fractions`}
-        data={[...fractionTraces, ...angleTraces]}
-        layout={fractionsLayout}
-        config={paperPlotConfig("polarisation-fractions-angles")}
-        useResizeHandler
-        style={{ width: "100%", height: "100%" }}
-      />
     </div>
   );
 
@@ -1031,7 +1036,7 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
                   />
                 ) : (
                   <MemoizedPlot
-                    data={[sphere3d, points3d]}
+                    data={[sphere3d, ...radialPathTraces, points3d]}
                     layout={{ ...layout3d, autosize: true, height: undefined, margin: { l: 0, r: 0, t: 60, b: 40 }, dragmode: "orbit" }}
                     config={paperPlotConfig("poincare-dual-view-fullscreen", { interactive: true })}
                     useResizeHandler
@@ -1154,6 +1159,43 @@ function getUnitSphereSurface(steps: number): SphereSurface {
   };
   sphereCache.set(steps, result);
   return result;
+}
+
+function makeRadialPathTraces(
+  xValues: number[],
+  yValues: number[],
+  zValues: number[],
+  phaseValues: number[],
+  startPhase: number,
+  endPhase: number,
+) {
+  const count = Math.min(xValues.length, yValues.length, zValues.length, phaseValues.length);
+  const step = Math.max(1, Math.ceil(count / MAX_RADIAL_PATH_TRACES));
+  const phaseSpan = endPhase - startPhase;
+  const traces = [];
+
+  for (let index = 0; index < count; index += step) {
+    const x = xValues[index];
+    const y = yValues[index];
+    const z = zValues[index];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+
+    const phase = phaseValues[index] ?? startPhase;
+    const normalizedPhase = phaseSpan === 0 ? 0 : (phase - startPhase) / phaseSpan;
+    traces.push({
+      type: "scatter3d" as const,
+      x: [0, x],
+      y: [0, y],
+      z: [0, z],
+      mode: "lines" as const,
+      line: { color: redToRedPhaseColor(normalizedPhase), width: 2 },
+      hoverinfo: "skip" as const,
+      showlegend: false,
+      name: "Polarization path",
+    });
+  }
+
+  return traces;
 }
 
 function clamp(value: number, min: number, max: number) {

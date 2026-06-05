@@ -10,15 +10,4 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  server: {
-    proxy: {
-      // Proxy /api/* to the remote MeerTime server to avoid CORS in dev
-      '/api': {
-        target: 'https://psrweb.jb.man.ac.uk',
-        changeOrigin: true,
-        secure: false,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
-  },
 })
