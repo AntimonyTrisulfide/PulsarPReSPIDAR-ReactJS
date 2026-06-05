@@ -53,6 +53,7 @@ import {
 
 type PlotRequestKey = "profiles" | "heatmaps" | "polarParams" | "subpulseParams" | "polarHistograms" | "polarStacks" | "phaseSlices" | "aitoff";
 type PlotRequestState = PlotRequestViewState & { version: number };
+type BackendResourceProfile = "safe" | "balanced" | "server";
 type QueuedPlotRequest = {
   key: PlotRequestKey;
   task: () => Promise<void>;
@@ -61,8 +62,15 @@ type QueuedPlotRequest = {
 
 const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "polarParams", "subpulseParams", "polarHistograms", "polarStacks", "phaseSlices", "aitoff"];
 const PLOT_REQUEST_DEBOUNCE_MS = 350;
-const PLOT_REQUEST_CONCURRENCY = getPositiveIntegerEnv(import.meta.env.VITE_PLOT_REQUEST_CONCURRENCY, 1);
-const PLOT_REQUEST_COOLDOWN_MS = getNonNegativeNumberEnv(import.meta.env.VITE_PLOT_REQUEST_COOLDOWN_MS, 550);
+const BACKEND_RESOURCE_PROFILES: Record<BackendResourceProfile, { concurrency: number; cooldownMs: number }> = {
+  safe: { concurrency: 1, cooldownMs: 550 },
+  balanced: { concurrency: 2, cooldownMs: 250 },
+  server: { concurrency: 4, cooldownMs: 0 },
+};
+const BACKEND_RESOURCE_PROFILE = getBackendResourceProfile(import.meta.env.VITE_BACKEND_RESOURCE_PROFILE);
+const BACKEND_RESOURCE_DEFAULTS = BACKEND_RESOURCE_PROFILES[BACKEND_RESOURCE_PROFILE];
+const PLOT_REQUEST_CONCURRENCY = getPositiveIntegerEnv(import.meta.env.VITE_PLOT_REQUEST_CONCURRENCY, BACKEND_RESOURCE_DEFAULTS.concurrency);
+const PLOT_REQUEST_COOLDOWN_MS = getNonNegativeNumberEnv(import.meta.env.VITE_PLOT_REQUEST_COOLDOWN_MS, BACKEND_RESOURCE_DEFAULTS.cooldownMs);
 const ARTIFICIAL_LOADING_DELAY_MS = import.meta.env.DEV
   ? getNonNegativeNumberEnv(import.meta.env.VITE_TEST_LOADING_DELAY_MS, 0)
   : 0;
@@ -77,6 +85,12 @@ function getPositiveIntegerEnv(value: string | undefined, fallback: number) {
 function getNonNegativeNumberEnv(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function getBackendResourceProfile(value: string | undefined): BackendResourceProfile {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "balanced" || normalized === "server") return normalized;
+  return "safe";
 }
 
 function createPlotRequestStates(): Record<PlotRequestKey, PlotRequestState> {
