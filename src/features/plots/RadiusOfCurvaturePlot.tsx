@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
+import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
 import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
 import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
@@ -12,6 +13,7 @@ type RadiusOfCurvaturePlotProps = {
 };
 
 export default function RadiusOfCurvaturePlot({ phaseAxis, radius, isDark }: RadiusOfCurvaturePlotProps) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const axisColor = isDark ? "#f8fbff" : "#111827";
   const gridColor = isDark ? "#374151" : "#cbd5e1";
   const paperBg = isDark ? "#080808" : "#f7fafc";
@@ -97,18 +99,38 @@ export default function RadiusOfCurvaturePlot({ phaseAxis, radius, isDark }: Rad
   }
 
   return (
-    <div className="plot-export-scope scientific-divider mt-8 h-[580px] w-full pt-7">
-      <div className="plot-toolbar mb-4 gap-2">
-        <PlotExportButtons filename="integrated-radius-of-curvature" />
-        <div className="plot-panel-title text-foreground">Radius of Curvature</div>
+    <>
+      <div className="plot-export-scope scientific-divider mt-8 h-[580px] w-full pt-7">
+        <div className="plot-toolbar mb-4 gap-2">
+          <FullscreenIconButton onClick={() => setIsFullscreen(true)} title="Fullscreen radius of curvature" />
+          <PlotExportButtons filename="integrated-radius-of-curvature" />
+          <div className="plot-panel-title text-foreground">Radius of Curvature</div>
+        </div>
+        <Plot
+          data={[trace]}
+          layout={layout}
+          config={paperPlotConfig("integrated-radius-of-curvature")}
+          useResizeHandler
+          style={{ width: "100%", height: "calc(100% - 4rem)" }}
+        />
       </div>
-      <Plot
-        data={[trace]}
-        layout={layout}
-        config={paperPlotConfig("integrated-radius-of-curvature")}
-        useResizeHandler
-        style={{ width: "100%", height: "calc(100% - 4rem)" }}
-      />
-    </div>
+      {isFullscreen && (
+        <FullscreenOverlay onClose={() => setIsFullscreen(false)} contentClassName="h-[92vh] w-[96vw] max-w-7xl p-4" title="Radius of curvature fullscreen">
+          <div className="plot-export-scope h-full w-full">
+            <div className="plot-toolbar mb-3 gap-2">
+              <PlotExportButtons filename="integrated-radius-of-curvature-fullscreen" />
+              <div className="plot-panel-title text-foreground">Radius of Curvature</div>
+            </div>
+            <Plot
+              data={[trace]}
+              layout={layout}
+              config={paperPlotConfig("integrated-radius-of-curvature-fullscreen")}
+              useResizeHandler
+              style={{ width: "100%", height: "calc(100% - 3.75rem)" }}
+            />
+          </div>
+        </FullscreenOverlay>
+      )}
+    </>
   );
 }

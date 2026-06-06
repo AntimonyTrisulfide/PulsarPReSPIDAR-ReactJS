@@ -29,7 +29,7 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   if (type === "number") {
     return (
       <div className="relative flex items-center">
-        <div className="absolute inset-y-1 left-1 flex w-16 items-center justify-between overflow-hidden rounded-md border border-border/70 bg-input text-foreground shadow-xs">
+        <div className="number-stepper-control absolute inset-y-1 left-1 flex w-16 items-center justify-between overflow-hidden rounded-md border border-border/70 bg-input text-foreground shadow-xs">
           <button
             type="button"
             aria-label="Decrease value"

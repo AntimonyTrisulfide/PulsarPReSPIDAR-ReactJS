@@ -54,9 +54,12 @@ import {
 type PlotRequestKey = "profiles" | "heatmaps" | "polarParams" | "subpulseParams" | "polarHistograms" | "polarStacks" | "phaseSlices" | "aitoff";
 type PlotRequestState = PlotRequestViewState & { version: number };
 type BackendResourceProfile = "safe" | "balanced" | "server";
+type PhaseControlsPlacement = "top" | "side";
+type CalculationPhaseWindow = { start: number; mid: number; end: number };
+type CalculationPhaseDraft = { start: string; mid: string; end: string };
 type QueuedPlotRequest = {
   key: PlotRequestKey;
-  task: () => Promise<void>;
+  task: (version: number) => Promise<void>;
   version: number;
 };
 
@@ -76,6 +79,35 @@ const ARTIFICIAL_LOADING_DELAY_MS = import.meta.env.DEV
   : 0;
 const delay = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
 const delayIfConfigured = () => ARTIFICIAL_LOADING_DELAY_MS > 0 ? delay(ARTIFICIAL_LOADING_DELAY_MS) : Promise.resolve();
+
+function formatPhaseInput(value: number) {
+  return Number.isFinite(value) ? String(Number(value.toFixed(6))) : "";
+}
+
+function createCalculationPhaseDraft(start: number, end: number, mid = (start + end) / 2): CalculationPhaseDraft {
+  return {
+    start: formatPhaseInput(start),
+    mid: formatPhaseInput(mid),
+    end: formatPhaseInput(end),
+  };
+}
+
+function parseCalculationPhaseDraft(draft: CalculationPhaseDraft): CalculationPhaseWindow | null {
+  if (!draft.start.trim() || !draft.mid.trim() || !draft.end.trim()) return null;
+  const start = Number(draft.start);
+  const mid = Number(draft.mid);
+  const end = Number(draft.end);
+  if (!Number.isFinite(start) || !Number.isFinite(mid) || !Number.isFinite(end)) return null;
+  return { start, mid, end };
+}
+
+function readPhaseControlsPlacement(): PhaseControlsPlacement {
+  try {
+    return localStorage.getItem("pulsar-prespidar-phase-controls-placement") === "side" ? "side" : "top";
+  } catch {
+    return "top";
+  }
+}
 
 function getPositiveIntegerEnv(value: string | undefined, fallback: number) {
   const parsed = Number(value);
@@ -125,6 +157,7 @@ const App: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [hasStoredRemoteCredentials, setHasStoredRemoteCredentials] = useState(Boolean(initialRemoteCredentials));
   const [showRemoteCredentialFields, setShowRemoteCredentialFields] = useState(isMeerTimeUrl(DEFAULT_MEERTIME_NPZ_URL) && !initialRemoteCredentials);
+  const [phaseControlsPlacement, setPhaseControlsPlacement] = useState<PhaseControlsPlacement>(() => readPhaseControlsPlacement());
   const [poincareAitoffData, setPoincareAitoffData] = useState<any>(null);
   const [phaseHistogramData, setPhaseHistogramData] = useState<any>(null);
   const [polHistogramData, setPolHistogramData] = useState<Record<string, any> | null>(null);
@@ -158,6 +191,9 @@ const App: React.FC = () => {
   const [isPreparingBackendDataset, setIsPreparingBackendDataset] = useState(false);
   const [preparedDataKey, setPreparedDataKey] = useState<string | null>(null);
   const [datasetOnPulse, setDatasetOnPulse] = useState({ start: 0.0, end: 1.0 });
+  const [loadedDatasetOnPulse, setLoadedDatasetOnPulse] = useState({ start: 0.0, end: 1.0 });
+  const [calculationPhaseDraft, setCalculationPhaseDraft] = useState<CalculationPhaseDraft>(() => createCalculationPhaseDraft(0, 1, 0.5));
+  const [calculationVersion, setCalculationVersion] = useState(0);
   const [plotRequestStates, setPlotRequestStates] = useState<Record<PlotRequestKey, PlotRequestState>>(createPlotRequestStates);
   const activePlotRequestsRef = useRef(0);
   const queuedPlotRequestsRef = useRef<QueuedPlotRequest[]>([]);
@@ -235,7 +271,7 @@ const App: React.FC = () => {
         message: "Sending data to the analysis backend.",
       });
 
-      job.task()
+      job.task(job.version)
         .then(() => setPlotRequestState(job.key, job.version, { status: "idle" }))
         .catch(error => {
           console.error("Queued plot request failed:", error);
@@ -252,7 +288,7 @@ const App: React.FC = () => {
     }
   };
 
-  const schedulePlotRequest = (key: PlotRequestKey, task: () => Promise<void>) => {
+  const schedulePlotRequest = (key: PlotRequestKey, task: (version: number) => Promise<void>) => {
     const requestVersion = plotRequestVersionsRef.current[key] + 1;
     plotRequestVersionsRef.current[key] = requestVersion;
 
@@ -271,40 +307,60 @@ const App: React.FC = () => {
     processPlotQueue();
   };
 
-  const applyNewFile = (
-    incoming: File | Blob,
-    nextPreparedDataKey: string | null = null,
-    nextOnPulse: { start: number; end: number } = { start: 0, end: 1 },
-  ) => {
-    resetPlotRequestQueue();
-    setFile(incoming);
-    setPreparedDataKey(nextPreparedDataKey);
-    setDatasetOnPulse(nextOnPulse);
-    setObsMetadata(null);
+  const isCurrentPlotRequest = (key: PlotRequestKey, version?: number) => (
+    version === undefined || plotRequestVersionsRef.current[key] === version
+  );
+
+  const clearPlotData = () => {
     setPoincareAitoffData(null);
     setPhaseHistogramData(null);
     setPolHistogramData(null);
     setPolStacksData(null);
     setPolarParamsData(null);
     setSubpulsePolarParamsData(null);
-    setStartPhaseAitoff(0.0);
-    setEndPhaseAitoff(1.0);
-    setStartPhaseSubpulse(0.0);
-    setEndPhaseSubpulse(1.0);
-    setSelectedSubpulseIndex(0);
-    setStartPhasePolHist(0.0);
-    setEndPhasePolHist(1.0);
-    setStartPhasePolStacks(0.0);
-    setEndPhasePolStacks(1.0);
-    setStartPhasePolarParams(0.0);
-    setEndPhasePolarParams(1.0);
-    setOnPulseStartPolarParams(0.0);
-    setOnPulseEndPolarParams(1.0);
     setProfilesData(null);
     setHeatmapsData(null);
-    setLeftPhaseHist(0.0);
-    setMidPhaseHist(0.5);
-    setRightPhaseHist(1.0);
+  };
+
+  const applyCalculationPhaseWindow = ({ start, mid, end }: CalculationPhaseWindow) => {
+    setDatasetOnPulse({ start, end });
+    setStartPhaseAitoff(start);
+    setEndPhaseAitoff(end);
+    setAitoffPhase(mid);
+    setStartPhaseSubpulse(start);
+    setEndPhaseSubpulse(end);
+    setStartPhasePolHist(start);
+    setEndPhasePolHist(end);
+    setStartPhasePolStacks(start);
+    setEndPhasePolStacks(end);
+    setStartPhaseProfiles(start);
+    setEndPhaseProfiles(end);
+    setStartPhaseHeatmaps(start);
+    setEndPhaseHeatmaps(end);
+    setStartPhasePolarParams(start);
+    setEndPhasePolarParams(end);
+    setOnPulseStartPolarParams(start);
+    setOnPulseEndPolarParams(end);
+    setLeftPhaseHist(start);
+    setMidPhaseHist(mid);
+    setRightPhaseHist(end);
+  };
+
+  const applyNewFile = (
+    incoming: File | Blob,
+    nextPreparedDataKey: string | null = null,
+    nextOnPulse: { start: number; end: number } = { start: 0, end: 1 },
+  ) => {
+    const mid = (nextOnPulse.start + nextOnPulse.end) / 2;
+    resetPlotRequestQueue();
+    setFile(incoming);
+    setPreparedDataKey(nextPreparedDataKey);
+    setObsMetadata(null);
+    setLoadedDatasetOnPulse(nextOnPulse);
+    clearPlotData();
+    applyCalculationPhaseWindow({ start: nextOnPulse.start, mid, end: nextOnPulse.end });
+    setCalculationPhaseDraft(createCalculationPhaseDraft(nextOnPulse.start, nextOnPulse.end, mid));
+    setSelectedSubpulseIndex(0);
   };
 
   const prepareBackendDataset = async (incoming: File | Blob, onPulse: { start: number; end: number }) => {
@@ -319,6 +375,46 @@ const App: React.FC = () => {
     } finally {
       setIsPreparingBackendDataset(false);
     }
+  };
+
+  const handleCalculationPhaseDraftChange = (key: keyof CalculationPhaseDraft, value: string) => {
+    setCalculationPhaseDraft(current => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handleUseDatasetOnPulse = () => {
+    const mid = (loadedDatasetOnPulse.start + loadedDatasetOnPulse.end) / 2;
+    setCalculationPhaseDraft(createCalculationPhaseDraft(loadedDatasetOnPulse.start, loadedDatasetOnPulse.end, mid));
+  };
+
+  const handleApplyCalculationPhaseWindow = async () => {
+    const nextWindow = parseCalculationPhaseDraft(calculationPhaseDraft);
+    if (!nextWindow) {
+      console.warn("Enter valid numeric phase values.");
+      return;
+    }
+    if (nextWindow.start > nextWindow.mid || nextWindow.mid > nextWindow.end) {
+      console.warn("Fix phase order: start <= mid <= end.");
+      return;
+    }
+    if (nextWindow.start < 0 || nextWindow.mid < 0 || nextWindow.end < 0 || nextWindow.start > 1 || nextWindow.mid > 1 || nextWindow.end > 1) {
+      console.warn("Phase values should be between 0 and 1.");
+      return;
+    }
+
+    resetPlotRequestQueue();
+    clearPlotData();
+
+    if (file) {
+      const dataKey = await prepareBackendDataset(file, { start: nextWindow.start, end: nextWindow.end });
+      setPreparedDataKey(dataKey);
+    }
+
+    applyCalculationPhaseWindow(nextWindow);
+    setCalculationPhaseDraft(createCalculationPhaseDraft(nextWindow.start, nextWindow.end, nextWindow.mid));
+    setCalculationVersion(version => version + 1);
   };
 
   // Handle file upload
@@ -363,7 +459,7 @@ const App: React.FC = () => {
     applyNewFile(droppedFile, dataKey, defaultOnPulse);
     void persistDatasetBlob(droppedFile);
   };
-  const fetchPoincareAitoffData = async () => {
+  const fetchPoincareAitoffData = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -378,7 +474,9 @@ const App: React.FC = () => {
         start: startPhaseAitoff,
         end: endPhaseAitoff,
       });
-      setPoincareAitoffData(result);
+      if (isCurrentPlotRequest("aitoff", requestVersion)) {
+        setPoincareAitoffData(result);
+      }
     } catch (err) {
       console.error("Error fetching Poincare Aitoff data:", err);
       if (err instanceof TypeError && err.message.includes("fetch")) {
@@ -388,7 +486,7 @@ const App: React.FC = () => {
     }
   };
 
-  const fetchProfilesData = async () => {
+  const fetchProfilesData = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -403,7 +501,9 @@ const App: React.FC = () => {
         start: startPhaseProfiles,
         end: endPhaseProfiles,
       });
-      setProfilesData(result);
+      if (isCurrentPlotRequest("profiles", requestVersion)) {
+        setProfilesData(result);
+      }
     } catch (err) {
       console.error("Error fetching profiles data:", err);
       if (err instanceof TypeError && err.message.includes("fetch")) {
@@ -500,7 +600,7 @@ const App: React.FC = () => {
   };
 
   // Call /export_heatmaps endpoint
-  const fetchHeatmapsData = async () => {
+  const fetchHeatmapsData = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -515,7 +615,9 @@ const App: React.FC = () => {
         start: startPhaseHeatmaps,
         end: endPhaseHeatmaps,
       });
-      setHeatmapsData(result);
+      if (isCurrentPlotRequest("heatmaps", requestVersion)) {
+        setHeatmapsData(result);
+      }
     } catch (err) {
       console.error("Error fetching heatmaps data:", err);
       if (err instanceof TypeError && err.message.includes("fetch")) {
@@ -526,7 +628,7 @@ const App: React.FC = () => {
   };
 
   // Call /polarisation_histogram endpoint for all quantities
-  const fetchPolarisationHistograms = async () => {
+  const fetchPolarisationHistograms = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -543,12 +645,16 @@ const App: React.FC = () => {
         start: startPhasePolHist,
         end: endPhasePolHist,
       }, datasetOnPulse, (quantity, payload) => {
-        setPolHistogramData((current: Record<string, any> | null) => ({
-          ...(current ?? {}),
-          [quantity]: payload,
-        }));
+        if (isCurrentPlotRequest("polarHistograms", requestVersion)) {
+          setPolHistogramData((current: Record<string, any> | null) => ({
+            ...(current ?? {}),
+            [quantity]: payload,
+          }));
+        }
       });
-      setPolHistogramData(results as Record<string, any>);
+      if (isCurrentPlotRequest("polarHistograms", requestVersion)) {
+        setPolHistogramData(results as Record<string, any>);
+      }
     } catch (err) {
       console.error("Error fetching polarisation histograms:", err);
       throw err;
@@ -556,7 +662,7 @@ const App: React.FC = () => {
   };
 
   // Call /polarisation_stacks endpoint
-  const fetchPolarisationStacks = async () => {
+  const fetchPolarisationStacks = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -573,25 +679,29 @@ const App: React.FC = () => {
         start: startPhasePolStacks,
         end: endPhasePolStacks,
       }, datasetOnPulse, (_quantity, payload) => {
-        setPolStacksData((current: any) => {
-          const nextQuantity = (payload as any)?.quantity;
-          if (!nextQuantity) return current;
-          const base = current ?? {
-            obs_id: (payload as any)?.obs_id,
-            start_phase: (payload as any)?.start_phase,
-            end_phase: (payload as any)?.end_phase,
-            on_pulse: (payload as any)?.on_pulse,
-            phase_axis: (payload as any)?.phase_axis ?? [],
-            pulse_number: (payload as any)?.pulse_number ?? [],
-            quantities: [],
-          };
-          return {
-            ...base,
-            quantities: [...base.quantities, nextQuantity],
-          };
-        });
+        if (isCurrentPlotRequest("polarStacks", requestVersion)) {
+          setPolStacksData((current: any) => {
+            const nextQuantity = (payload as any)?.quantity;
+            if (!nextQuantity) return current;
+            const base = current ?? {
+              obs_id: (payload as any)?.obs_id,
+              start_phase: (payload as any)?.start_phase,
+              end_phase: (payload as any)?.end_phase,
+              on_pulse: (payload as any)?.on_pulse,
+              phase_axis: (payload as any)?.phase_axis ?? [],
+              pulse_number: (payload as any)?.pulse_number ?? [],
+              quantities: [],
+            };
+            return {
+              ...base,
+              quantities: [...base.quantities, nextQuantity],
+            };
+          });
+        }
       });
-      setPolStacksData(result);
+      if (isCurrentPlotRequest("polarStacks", requestVersion)) {
+        setPolStacksData(result);
+      }
     } catch (err) {
       console.error("Error fetching polarisation stacks:", err);
       if (err instanceof TypeError && err.message.includes("fetch")) {
@@ -602,7 +712,7 @@ const App: React.FC = () => {
   };
 
   // Call /polarisation_preprocess endpoint for derived parameters and Poincare coords
-  const fetchPolarisationParams = async () => {
+  const fetchPolarisationParams = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -623,14 +733,16 @@ const App: React.FC = () => {
         { start: startPhasePolarParams, end: endPhasePolarParams },
         { start: onPulseStartPolarParams, end: onPulseEndPolarParams },
       );
-      setPolarParamsData(result);
+      if (isCurrentPlotRequest("polarParams", requestVersion)) {
+        setPolarParamsData(result);
+      }
     } catch (err) {
       console.error("Error fetching polarisation parameters:", err);
       throw err;
     }
   };
 
-  const fetchSubpulsePolarisationParams = async () => {
+  const fetchSubpulsePolarisationParams = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -650,7 +762,9 @@ const App: React.FC = () => {
         0,
         backendPulseIndex,
       );
-      setSubpulsePolarParamsData(result);
+      if (isCurrentPlotRequest("subpulseParams", requestVersion)) {
+        setSubpulsePolarParamsData(result);
+      }
     } catch (err) {
       console.error("Error fetching selected subpulse polarisation parameters:", err);
       throw err;
@@ -658,7 +772,7 @@ const App: React.FC = () => {
   };
 
   // Call /phase_slice_histograms endpoint
-  const fetchPhaseSliceHistograms = async () => {
+  const fetchPhaseSliceHistograms = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
       console.warn("No file selected or loaded.");
@@ -677,22 +791,26 @@ const App: React.FC = () => {
         mid: midPhaseHist,
         right: rightPhaseHist,
       }, datasetOnPulse, (_quantity, payload) => {
-        setPhaseHistogramData((current: any) => {
-          const nextQuantity = (payload as any)?.quantity;
-          if (!nextQuantity) return current;
-          const base = current ?? {
-            obs_id: (payload as any)?.obs_id,
-            phase_values: (payload as any)?.phase_values ?? [],
-            phase_bins: (payload as any)?.phase_bins ?? [],
-            quantities: [],
-          };
-          return {
-            ...base,
-            quantities: [...base.quantities, nextQuantity],
-          };
-        });
+        if (isCurrentPlotRequest("phaseSlices", requestVersion)) {
+          setPhaseHistogramData((current: any) => {
+            const nextQuantity = (payload as any)?.quantity;
+            if (!nextQuantity) return current;
+            const base = current ?? {
+              obs_id: (payload as any)?.obs_id,
+              phase_values: (payload as any)?.phase_values ?? [],
+              phase_bins: (payload as any)?.phase_bins ?? [],
+              quantities: [],
+            };
+            return {
+              ...base,
+              quantities: [...base.quantities, nextQuantity],
+            };
+          });
+        }
       });
-      setPhaseHistogramData(result);
+      if (isCurrentPlotRequest("phaseSlices", requestVersion)) {
+        setPhaseHistogramData(result);
+      }
     } catch (err) {
       console.error("Error fetching phase-slice histograms:", err);
       if (err instanceof TypeError && err.message.includes("fetch")) {
@@ -738,6 +856,7 @@ const App: React.FC = () => {
         setLeftPhaseHist(savedSettings.leftPhaseHist);
         setMidPhaseHist(savedSettings.midPhaseHist);
         setRightPhaseHist(savedSettings.rightPhaseHist);
+        setCalculationPhaseDraft(createCalculationPhaseDraft(savedSettings.leftPhaseHist, savedSettings.rightPhaseHist, savedSettings.midPhaseHist));
       } else {
         setHasStoredRemoteCredentials(Boolean(savedRemoteCredentials));
         setShowRemoteCredentialFields(isMeerTimeUrl(savedUrl) && !savedRemoteCredentials);
@@ -770,6 +889,7 @@ const App: React.FC = () => {
         setLeftPhaseHist(savedSettings.leftPhaseHist);
         setMidPhaseHist(savedSettings.midPhaseHist);
         setRightPhaseHist(savedSettings.rightPhaseHist);
+        setCalculationPhaseDraft(createCalculationPhaseDraft(savedSettings.leftPhaseHist, savedSettings.rightPhaseHist, savedSettings.midPhaseHist));
       }
     };
     void restoreSession();
@@ -835,7 +955,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [startPhaseProfiles, endPhaseProfiles, file]);
+  }, [startPhaseProfiles, endPhaseProfiles, calculationVersion, file]);
 
   useEffect(() => {
     if (!file) return;
@@ -844,7 +964,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [startPhaseHeatmaps, endPhaseHeatmaps, file]);
+  }, [startPhaseHeatmaps, endPhaseHeatmaps, calculationVersion, file]);
 
   useEffect(() => {
     if (!file) return;
@@ -854,7 +974,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams]);
+  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams, calculationVersion]);
 
   useEffect(() => {
     if (!file) return;
@@ -871,6 +991,7 @@ const App: React.FC = () => {
     selectedSubpulseIndex,
     datasetOnPulse.start,
     datasetOnPulse.end,
+    calculationVersion,
   ]);
 
   useEffect(() => {
@@ -880,7 +1001,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, startPhasePolHist, endPhasePolHist]);
+  }, [file, startPhasePolHist, endPhasePolHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
 
   useEffect(() => {
     if (!file) return;
@@ -889,7 +1010,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, startPhasePolStacks, endPhasePolStacks]);
+  }, [file, startPhasePolStacks, endPhasePolStacks, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
 
   useEffect(() => {
     if (!file) return;
@@ -898,7 +1019,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist]);
+  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
 
   useEffect(() => {
     if (!file) return;
@@ -907,7 +1028,7 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, file]);
+  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, calculationVersion, file]);
 
   const polarParamsState = getCombinedPlotState("polarParams");
   const subpulseParamsState = getCombinedPlotState("subpulseParams");
@@ -919,10 +1040,18 @@ const App: React.FC = () => {
   const hasLoadedData = file !== null;
   const runningPlotCount = Object.values(plotRequestStates).filter(state => state.status === "running").length;
   const queuedPlotCount = Object.values(plotRequestStates).filter(state => state.status === "queued").length;
-  const stacksRangeInvalid = isInvalidRange(startPhasePolStacks, endPhasePolStacks);
-  const histogramsRangeInvalid = isInvalidRange(startPhasePolHist, endPhasePolHist);
   const subpulseRangeInvalid = isInvalidRange(startPhaseSubpulse, endPhaseSubpulse);
-  const phaseSlicesRangeInvalid = leftPhaseHist > midPhaseHist || midPhaseHist > rightPhaseHist;
+  const parsedCalculationPhaseDraft = parseCalculationPhaseDraft(calculationPhaseDraft);
+  const calculationPhaseDraftInvalid = !parsedCalculationPhaseDraft
+    || parsedCalculationPhaseDraft.start > parsedCalculationPhaseDraft.mid
+    || parsedCalculationPhaseDraft.mid > parsedCalculationPhaseDraft.end
+    || parsedCalculationPhaseDraft.start < 0
+    || parsedCalculationPhaseDraft.mid < 0
+    || parsedCalculationPhaseDraft.end < 0
+    || parsedCalculationPhaseDraft.start > 1
+    || parsedCalculationPhaseDraft.mid > 1
+    || parsedCalculationPhaseDraft.end > 1;
+  const appliedPhaseSummary = `${startPhaseProfiles.toFixed(3)} - ${midPhaseHist.toFixed(3)} - ${endPhaseProfiles.toFixed(3)}`;
   const totalSubpulses = Number(subpulsePolarParamsData?.num_pulses ?? polarParamsData?.num_pulses ?? 0);
   const isMeerTimeLink = isMeerTimeUrl(url.trim());
   const shouldOfferRemoteCredentials = isMeerTimeLink || hasStoredRemoteCredentials || showRemoteCredentialFields;
@@ -950,6 +1079,15 @@ const App: React.FC = () => {
     setShowRemoteCredentialFields(isMeerTimeLink);
     setUsername("");
     setPassword("");
+  };
+
+  const handlePhaseControlsPlacementChange = (nextPlacement: PhaseControlsPlacement) => {
+    setPhaseControlsPlacement(nextPlacement);
+    try {
+      localStorage.setItem("pulsar-prespidar-phase-controls-placement", nextPlacement);
+    } catch {
+      // Placement persistence is optional; the active state still updates.
+    }
   };
 
   const applyThemeImmediately = (nextIsDark: boolean) => {
@@ -1191,10 +1329,103 @@ const App: React.FC = () => {
                   </div>
                 </div>
           </div>
+
         </section>
 
         {hasLoadedData && (
           <>
+            <div className={phaseControlsPlacement === "side" ? "phase-control-dock phase-control-dock-side" : "phase-control-dock phase-control-dock-top"}>
+              <Collapsible defaultOpen className="phase-control-bar">
+                <div className="phase-control-shell">
+                  <div className="phase-control-header">
+                    <CollapsibleTrigger asChild>
+                      <button type="button" className="phase-control-trigger" aria-label="Toggle phase controls">
+                        <span className="min-w-0">
+                          <span className="phase-control-title">Phase controls</span>
+                          <span className="phase-control-summary">Applied: {appliedPhaseSummary}</span>
+                        </span>
+                        <ChevronDown className="phase-control-icon h-4 w-4" />
+                      </button>
+                    </CollapsibleTrigger>
+                    <div className="phase-control-placement" aria-label="Phase control position">
+                      <button
+                        type="button"
+                        className={`phase-control-placement-button ${phaseControlsPlacement === "top" ? "is-active" : ""}`}
+                        aria-pressed={phaseControlsPlacement === "top"}
+                        onClick={() => handlePhaseControlsPlacementChange("top")}
+                      >
+                        Top
+                      </button>
+                      <button
+                        type="button"
+                        className={`phase-control-placement-button ${phaseControlsPlacement === "side" ? "is-active" : ""}`}
+                        aria-pressed={phaseControlsPlacement === "side"}
+                        onClick={() => handlePhaseControlsPlacementChange("side")}
+                      >
+                        Side
+                      </button>
+                    </div>
+                  </div>
+                  <CollapsibleContent>
+                    <div className="phase-control-content">
+                      <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div>
+                          <Label className="form-label text-foreground">Start phase</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.001}
+                            value={calculationPhaseDraft.start}
+                            disabled={isPreparingInput}
+                            onChange={e => handleCalculationPhaseDraftChange("start", e.target.value)}
+                            className={calculationPhaseDraftInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          />
+                        </div>
+                        <div>
+                          <Label className="form-label text-foreground">Mid / fixed phase</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.001}
+                            value={calculationPhaseDraft.mid}
+                            disabled={isPreparingInput}
+                            onChange={e => handleCalculationPhaseDraftChange("mid", e.target.value)}
+                            className={calculationPhaseDraftInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          />
+                        </div>
+                        <div>
+                          <Label className="form-label text-foreground">End phase</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.001}
+                            value={calculationPhaseDraft.end}
+                            disabled={isPreparingInput}
+                            onChange={e => handleCalculationPhaseDraftChange("end", e.target.value)}
+                            className={calculationPhaseDraftInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button type="button" variant="ghost" onClick={handleUseDatasetOnPulse} disabled={isPreparingInput}>
+                          Use dataset window
+                        </Button>
+                        <Button type="button" onClick={handleApplyCalculationPhaseWindow} disabled={calculationPhaseDraftInvalid || isPreparingInput}>
+                          {isPreparingBackendDataset ? "Preparing..." : "Apply and calculate"}
+                        </Button>
+                      </div>
+                      {calculationPhaseDraftInvalid && (
+                        <div className="basis-full text-sm font-semibold text-red-600">Use 0 &lt;= start &lt;= mid &lt;= end &lt;= 1.</div>
+                      )}
+                    </div>
+                  </CollapsibleContent>
+                </div>
+              </Collapsible>
+            </div>
+
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="section-title">Plots</h2>
               <QueueStatusSummary
@@ -1217,35 +1448,9 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Start Phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhaseProfiles}
-                          onChange={e => setStartPhaseProfiles(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">End Phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhaseProfiles}
-                          onChange={e => setEndPhaseProfiles(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseProfiles, endPhaseProfiles) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase window: {startPhaseProfiles.toFixed(3)} - {endPhaseProfiles.toFixed(3)}</div>
                     </div>
-                    {isInvalidRange(startPhaseProfiles, endPhaseProfiles) && (
-                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={profilesState} label="Waterfall profiles and heatmaps" hasData={!!profilesData} deferUntilVisible placeholderMinHeight="32rem">
                         <ErrorBoundary>
@@ -1275,43 +1480,10 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">On-pulse start / start phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={onPulseStartPolarParams}
-                          onChange={e => {
-                            const val = Number(e.target.value);
-                            setOnPulseStartPolarParams(val);
-                            setStartPhasePolarParams(val);
-                          }}
-                          className={isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">On-pulse end / end phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={onPulseEndPolarParams}
-                          onChange={e => {
-                            const val = Number(e.target.value);
-                            setOnPulseEndPolarParams(val);
-                            setEndPhasePolarParams(val);
-                          }}
-                          className={isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase window: {startPhasePolarParams.toFixed(3)} - {endPhasePolarParams.toFixed(3)}</div>
+                      <div>On-pulse window: {onPulseStartPolarParams.toFixed(3)} - {onPulseEndPolarParams.toFixed(3)}</div>
                     </div>
-                    {isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams) && (
-                      <div className="validation-note text-red-600 mt-1">Ensure start &lt;= end for the on-pulse window.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={polarParamsState} label="Polarisation parameters" hasData={!!polarParamsData?.dataset?.length} deferUntilVisible placeholderMinHeight="40rem">
                         <ErrorBoundary>
@@ -1363,37 +1535,10 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-3 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Start phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhaseSubpulse}
-                          onChange={e => {
-                            setStartPhaseSubpulse(Number(e.target.value));
-                            setSubpulsePolarParamsData(null);
-                          }}
-                          className={subpulseRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">End phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhaseSubpulse}
-                          onChange={e => {
-                            setEndPhaseSubpulse(Number(e.target.value));
-                            setSubpulsePolarParamsData(null);
-                          }}
-                          className={subpulseRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase window: {startPhaseSubpulse.toFixed(3)} - {endPhaseSubpulse.toFixed(3)}</div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 items-end mt-2 sm:max-w-xs">
                       <div>
                         <Label className="form-label text-muted-foreground">Pulse index</Label>
                         <Input
@@ -1446,41 +1591,9 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Start phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhasePolHist}
-                          onChange={e => {
-                            setStartPhasePolHist(Number(e.target.value));
-                            setPolHistogramData(null);
-                          }}
-                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">End phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhasePolHist}
-                          onChange={e => {
-                            setEndPhasePolHist(Number(e.target.value));
-                            setPolHistogramData(null);
-                          }}
-                          className={histogramsRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase window: {startPhasePolHist.toFixed(3)} - {endPhasePolHist.toFixed(3)}</div>
                     </div>
-                    {histogramsRangeInvalid && (
-                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={histogramsState} label="Phase-resolved polarisation histograms" hasData={!!polHistogramData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
@@ -1510,41 +1623,9 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-2 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Start phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhasePolStacks}
-                          onChange={e => {
-                            setStartPhasePolStacks(Number(e.target.value));
-                            setPolStacksData(null);
-                          }}
-                          className={stacksRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">End phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhasePolStacks}
-                          onChange={e => {
-                            setEndPhasePolStacks(Number(e.target.value));
-                            setPolStacksData(null);
-                          }}
-                          className={stacksRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase window: {startPhasePolStacks.toFixed(3)} - {endPhasePolStacks.toFixed(3)}</div>
                     </div>
-                    {stacksRangeInvalid && (
-                      <div className="validation-note text-red-600 mt-1">Start phase must be &lt;= end phase.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={stacksState} label="Polarisation stacks" hasData={!!polStacksData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
@@ -1568,56 +1649,9 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-3 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Left phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={leftPhaseHist}
-                          onChange={e => {
-                            setLeftPhaseHist(Number(e.target.value));
-                            setPhaseHistogramData(null);
-                          }}
-                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">Mid phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={midPhaseHist}
-                          onChange={e => {
-                            setMidPhaseHist(Number(e.target.value));
-                            setPhaseHistogramData(null);
-                          }}
-                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">Right phase</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={rightPhaseHist}
-                          onChange={e => {
-                            setRightPhaseHist(Number(e.target.value));
-                            setPhaseHistogramData(null);
-                          }}
-                          className={phaseSlicesRangeInvalid ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Phase slices: {leftPhaseHist.toFixed(3)} - {midPhaseHist.toFixed(3)} - {rightPhaseHist.toFixed(3)}</div>
                     </div>
-                    {phaseSlicesRangeInvalid && (
-                      <div className="validation-note text-red-600 mt-1">Ensure phase order: left &lt;= mid &lt;= right.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={phaseSlicesState} label="Phase-slice histograms" hasData={!!phaseHistogramData} deferUntilVisible placeholderMinHeight="30rem">
                         <ErrorBoundary>
@@ -1645,39 +1679,10 @@ const App: React.FC = () => {
                         <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
                       </div>
                     )}
-                    <div className="grid grid-cols-3 gap-2 items-end mt-2">
-                      <div>
-                        <Label className="form-label text-muted-foreground">Phase value</Label>
-                        <Input type="number" min={0} max={1} step={0.001} value={aitoffPhase} onChange={e => setAitoffPhase(Number(e.target.value))} />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">On-pulse start</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={startPhaseAitoff}
-                          onChange={e => setStartPhaseAitoff(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseAitoff, endPhaseAitoff) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
-                      <div>
-                        <Label className="form-label text-muted-foreground">On-pulse end</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={endPhaseAitoff}
-                          onChange={e => setEndPhaseAitoff(Number(e.target.value))}
-                          className={isInvalidRange(startPhaseAitoff, endPhaseAitoff) ? "border-red-500 focus-visible:ring-red-500" : undefined}
-                        />
-                      </div>
+                    <div className="section-metadata mt-2">
+                      <div>Fixed phase: {aitoffPhase.toFixed(3)}</div>
+                      <div>On-pulse window: {startPhaseAitoff.toFixed(3)} - {endPhaseAitoff.toFixed(3)}</div>
                     </div>
-                    {isInvalidRange(startPhaseAitoff, endPhaseAitoff) && (
-                      <div className="validation-note text-red-600 mt-1">On-pulse start must be &lt;= end.</div>
-                    )}
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!poincareAitoffData} deferUntilVisible placeholderMinHeight="32rem">
                         <ErrorBoundary>

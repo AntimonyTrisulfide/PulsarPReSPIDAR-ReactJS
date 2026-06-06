@@ -214,7 +214,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
-      .text((lat: number) => `${lat} deg`);
+      .text((lat: number) => `${lat}°`);
 
     g.selectAll(".aitoff-lon-tick")
       .data(lonLabelValues)
@@ -244,7 +244,7 @@ export default function PoincareAitoffView({ data, phaseValue, isDark }: Poincar
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
-      .text((lon: number) => `${lon} deg`);
+      .text((lon: number) => `${lon}°`);
 
     svg.append("text")
       .attr("x", width / 2)
@@ -456,7 +456,7 @@ function drawColorbar(
     .attr("text-anchor", "start")
     .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
-    .text(`${minLat.toFixed(1)} deg`);
+    .text(`${minLat.toFixed(1)}°`);
 
   svg.append("text")
     .attr("x", colorbarX + colorbarWidth / 2)
@@ -472,7 +472,7 @@ function drawColorbar(
     .attr("text-anchor", "end")
     .attr("font-size", labelFontSize)
     .attr("fill", mutedColor)
-    .text(`${maxLat.toFixed(1)} deg`);
+    .text(`${maxLat.toFixed(1)}°`);
 }
 
 function makeSceneAxis(title: string, axisColor: string, gridColor: string) {

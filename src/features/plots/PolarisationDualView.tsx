@@ -314,7 +314,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .attr("stroke-width", metrics.pointStrokeWidth);
 
     circles.append("title")
-      .text((point: DualAitoffPoint) => `Lon: ${point.lon.toFixed(2)} deg\nLat: ${point.lat.toFixed(2)} deg\nPhase: ${point.phase.toFixed(4)}`);
+      .text((point: DualAitoffPoint) => `Lon: ${point.lon.toFixed(2)}°\nLat: ${point.lat.toFixed(2)}°\nPhase: ${point.phase.toFixed(4)}`);
 
     if (!points.length) {
       g.append("text")
@@ -340,7 +340,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
-      .text((lat: number) => `${lat} deg`);
+      .text((lat: number) => `${lat}°`);
 
     g.selectAll(".dual-aitoff-lon-tick")
       .data(aitoffLonLabelValues)
@@ -370,7 +370,7 @@ const DualAitoffProjection = memo(function DualAitoffProjection({
       .attr("paint-order", "stroke")
       .attr("stroke", bgColor)
       .attr("stroke-width", Math.max(4, labelFontSize * 0.42))
-      .text((lon: number) => `${lon} deg`);
+      .text((lon: number) => `${lon}°`);
 
     svg.append("text")
       .attr("x", width / 2)
@@ -578,8 +578,8 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
   ].filter(isPlotTrace)), [data.absv_frac, data.l_frac, data.p_frac, data.v_frac, phaseAxis, visibleSeries]);
 
   const angleTraces = useMemo(() => ([
-    visibleSeries.PA ? { x: phaseAxis, y: data.PA, type: "scatter" as const, mode: "markers" as const, name: "PA (deg)", line: { color: "#2563eb" }, xaxis: "x2", yaxis: "y2" } : null,
-    visibleSeries.EA ? { x: phaseAxis, y: data.EA, type: "scatter" as const, mode: "markers" as const, name: "EA (deg)", line: { color: "#dc2626" }, xaxis: "x2", yaxis: "y2" } : null,
+    visibleSeries.PA ? { x: phaseAxis, y: data.PA, type: "scatter" as const, mode: "markers" as const, name: "PA (°)", line: { color: "#2563eb" }, xaxis: "x2", yaxis: "y2" } : null,
+    visibleSeries.EA ? { x: phaseAxis, y: data.EA, type: "scatter" as const, mode: "markers" as const, name: "EA (°)", line: { color: "#dc2626" }, xaxis: "x2", yaxis: "y2" } : null,
   ].filter(isPlotTrace)), [data.EA, data.PA, phaseAxis, visibleSeries]);
 
   const absPA = useMemo(() => (data.PA ?? []).map(v => Math.abs(v)), [data.PA]);
@@ -594,10 +594,10 @@ function PolarisationDualView({ phaseAxis, data, isDark, startPhase = 0, endPhas
       { key: "l_frac" as AxisKey, label: "L/I", values: data.l_frac ?? [] },
       { key: "v_frac" as AxisKey, label: "V/I", values: data.v_frac ?? [] },
       { key: "absv_frac" as AxisKey, label: "|V/I|", values: data.absv_frac ?? [] },
-      { key: "PA" as AxisKey, label: "PA (deg)", values: data.PA ?? [] },
-      { key: "EA" as AxisKey, label: "EA (deg)", values: data.EA ?? [] },
-      { key: "absPA" as AxisKey, label: "|PA| (deg)", values: absPA },
-      { key: "absEA" as AxisKey, label: "|EA| (deg)", values: absEA },
+      { key: "PA" as AxisKey, label: "PA (°)", values: data.PA ?? [] },
+      { key: "EA" as AxisKey, label: "EA (°)", values: data.EA ?? [] },
+      { key: "absPA" as AxisKey, label: "|PA| (°)", values: absPA },
+      { key: "absEA" as AxisKey, label: "|EA| (°)", values: absEA },
     ];
   }, [absEA, absPA, data.EA, data.PA, data.absv_frac, data.l_frac, data.p_frac, data.v_frac, phaseAxis]);
 

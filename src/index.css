@@ -244,9 +244,298 @@
     transform: rotate(180deg);
   }
 
+  .phase-control-dock {
+    position: sticky;
+    top: 0.75rem;
+    z-index: 30;
+    margin-top: -0.35rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .phase-control-dock-side {
+    position: fixed;
+    top: 5rem;
+    right: 1rem;
+    width: auto;
+    max-width: calc(100vw - 2rem);
+    margin: 0;
+    z-index: 45;
+  }
+
+  .phase-control-bar {
+    width: 100%;
+  }
+
+  .phase-control-dock-side .phase-control-bar {
+    width: 24rem;
+    max-width: calc(100vw - 2rem);
+    transition: width 160ms ease;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] {
+    width: 3.15rem;
+  }
+
+  .phase-control-shell {
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: 0.5rem;
+    background: hsl(var(--card) / 0.94);
+    box-shadow: 0 12px 28px hsl(var(--foreground) / 0.08);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-shell {
+    border-radius: 999px;
+  }
+
+  .phase-control-dock-side .phase-control-shell {
+    max-height: calc(100vh - 6rem);
+  }
+
+  .phase-control-header {
+    display: flex;
+    align-items: stretch;
+    gap: 0.35rem;
+    padding: 0.35rem;
+  }
+
+  .phase-control-trigger {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border-radius: 0.35rem;
+    padding: 0.55rem 0.65rem;
+    color: hsl(var(--foreground));
+    text-align: left;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-header {
+    display: block;
+    padding: 0.25rem;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-trigger {
+    width: 2.65rem;
+    min-height: 9.5rem;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.25rem;
+    text-align: center;
+  }
+
+  .phase-control-trigger:hover,
+  .phase-control-trigger:focus-visible {
+    background: hsl(var(--muted) / 0.55);
+    outline: none;
+  }
+
+  .phase-control-title,
+  .phase-control-summary {
+    display: block;
+    min-width: 0;
+  }
+
+  .phase-control-title {
+    font-size: 0.9rem;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-title {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+  }
+
+  .phase-control-summary {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-summary,
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-placement {
+    display: none;
+  }
+
+  .phase-control-placement {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.2rem;
+    border-radius: 0.35rem;
+    border: 1px solid hsl(var(--border) / 0.8);
+    background: hsl(var(--background) / 0.72);
+    padding: 0.18rem;
+  }
+
+  .phase-control-placement-button {
+    min-width: 3rem;
+    border-radius: 0.25rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.75rem;
+    font-weight: 800;
+    line-height: 1;
+    padding: 0.48rem 0.55rem;
+    transition: background-color 160ms ease, color 160ms ease;
+  }
+
+  .phase-control-placement-button:hover,
+  .phase-control-placement-button:focus-visible {
+    background: hsl(var(--muted) / 0.72);
+    color: hsl(var(--foreground));
+    outline: none;
+  }
+
+  .phase-control-placement-button.is-active {
+    background: hsl(var(--foreground));
+    color: hsl(var(--background));
+  }
+
+  .phase-control-icon {
+    flex: 0 0 auto;
+    transition: transform 220ms ease;
+  }
+
+  .phase-control-bar[data-state="open"] .phase-control-icon {
+    transform: rotate(180deg);
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="closed"] .phase-control-icon {
+    transform: rotate(90deg);
+  }
+
+  .phase-control-dock-side .phase-control-bar[data-state="open"] .phase-control-icon {
+    transform: rotate(-90deg);
+  }
+
+  .phase-control-content {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    border-top: 1px solid hsl(var(--border) / 0.7);
+    padding: 0.9rem;
+    max-height: min(55vh, 24rem);
+    overflow: auto;
+  }
+
+  .phase-control-dock-side .phase-control-content {
+    display: block;
+    max-height: calc(100vh - 10.5rem);
+  }
+
+  .phase-control-dock-side .phase-control-content > .grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100%;
+    margin-bottom: 0.75rem;
+  }
+
+  .phase-control-dock-side .phase-control-content > .flex {
+    justify-content: flex-end;
+  }
+
   .field-shell {
     border-color: hsl(var(--border)) !important;
     background: hsl(var(--input)) !important;
+  }
+
+  :root:not(.dark) [data-slot="input"],
+  :root:not(.dark) .field-shell {
+    border-color: hsl(220 30% 14% / 0.62) !important;
+    box-shadow: inset 0 0 0 1px hsl(220 30% 14% / 0.12);
+  }
+
+  :root:not(.dark) [data-slot="input"]:focus-visible,
+  :root:not(.dark) .field-shell:focus-visible {
+    border-color: hsl(220 35% 9% / 0.9) !important;
+    box-shadow:
+      0 0 0 3px hsl(var(--ring) / 0.22),
+      inset 0 0 0 1px hsl(220 35% 9% / 0.18) !important;
+  }
+
+  :root:not(.dark) .number-stepper-control {
+    border-color: hsl(220 30% 14% / 0.55) !important;
+  }
+
+  .subpulse-split {
+    height: clamp(36rem, 72vh, 46rem);
+    min-height: clamp(36rem, 72vh, 46rem);
+  }
+
+  .subpulse-split-pane {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .subpulse-poincare-panel {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .subpulse-parameters-pane {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .subpulse-quantity-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .subpulse-quantity-toolbar {
+    align-items: center;
+  }
+
+  .subpulse-quantity-select {
+    width: auto;
+    min-width: 7rem;
+    max-width: 10rem;
+    height: 2.25rem;
+    margin-left: auto;
+    border-radius: 0.375rem;
+    padding: 0.25rem 2rem 0.25rem 0.65rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .subpulse-quantity-plot {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .subpulse-combined-controls {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.65rem;
+    padding: 0.75rem 0 0.2rem;
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+
+  .subpulse-poincare-panel .js-plotly-plot,
+  .subpulse-poincare-panel .plot-container,
+  .subpulse-poincare-panel .svg-container {
+    max-width: 100% !important;
   }
 
   .control-slab {
@@ -845,6 +1134,24 @@
     border-top-color: hsl(0 0% 100%);
   }
 
+  @media (max-width: 760px) {
+    .phase-control-dock-side {
+      top: 0.75rem;
+      left: 0.75rem;
+      right: 0.75rem;
+      width: auto;
+    }
+
+    .phase-control-header {
+      flex-wrap: wrap;
+    }
+
+    .phase-control-placement {
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
+
   .plot-queue-summary,
   .plot-status-badge {
     display: inline-flex;
@@ -1088,6 +1395,36 @@
 
     .split-resizer {
       display: none;
+    }
+
+    .subpulse-split {
+      height: auto;
+      min-height: 0;
+    }
+
+    .subpulse-split-pane {
+      min-height: 0;
+    }
+
+    .subpulse-poincare-panel {
+      height: clamp(32rem, 72vh, 42rem);
+      min-height: 0;
+    }
+
+    .subpulse-parameters-pane {
+      height: clamp(30rem, 70vh, 40rem);
+      max-height: none;
+      overflow: hidden;
+    }
+
+    .subpulse-quantity-toolbar {
+      align-items: flex-start;
+    }
+
+    .subpulse-quantity-select {
+      width: 100%;
+      max-width: none;
+      margin-left: 0;
     }
   }
 
