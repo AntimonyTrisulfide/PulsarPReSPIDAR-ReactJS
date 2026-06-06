@@ -444,25 +444,44 @@ function metadataFromPipeline(url: string, pipelineInfo: Record<string, any>): O
   };
 }
 
-function getRemoteRequestInit(credentials?: RemoteAuthCredentials): RequestInit | undefined {
+function isProxiedMeerTimeFetchUrl(fetchUrl: string) {
+  try {
+    const proxyUrl = new URL(MEERTIME_PROXY_URL, window.location.origin);
+    const parsedFetchUrl = new URL(fetchUrl, window.location.origin);
+    return parsedFetchUrl.origin === proxyUrl.origin && parsedFetchUrl.pathname === proxyUrl.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function getRemoteRequestInit(fetchUrl: string, credentials?: RemoteAuthCredentials): RequestInit | undefined {
   if (!credentials?.username || !credentials.password) return undefined;
+  const authorization = "Basic " + btoa(credentials.username + ":" + credentials.password);
+  const headers: Record<string, string> = {
+    Authorization: authorization,
+  };
+
+  if (isProxiedMeerTimeFetchUrl(fetchUrl)) {
+    headers["X-Upstream-Authorization"] = authorization;
+    headers["X-MeerTime-Authorization"] = authorization;
+  }
+
   return {
-    headers: {
-      Authorization: "Basic " + btoa(credentials.username + ":" + credentials.password),
-    },
+    headers,
   };
 }
 
 export async function loadRemoteNpz(url: string, credentials?: RemoteAuthCredentials): Promise<RemoteFileLoadResult> {
   const fetchUrl = resolveRemoteFetchUrl(url);
-  const requestInit = getRemoteRequestInit(credentials);
+  const requestInit = getRemoteRequestInit(fetchUrl, credentials);
   const onPulse = { start: 0, end: 1, mid: 0.5 };
   let pipelineJson: Record<string, any> | null = null;
 
   const pipelineInfoUrl = getPipelineInfoUrl(url);
   if (pipelineInfoUrl) {
     try {
-      const pipelineRes = await fetch(resolveRemoteFetchUrl(pipelineInfoUrl), requestInit);
+      const pipelineFetchUrl = resolveRemoteFetchUrl(pipelineInfoUrl);
+      const pipelineRes = await fetch(pipelineFetchUrl, getRemoteRequestInit(pipelineFetchUrl, credentials));
       if (pipelineRes.ok) {
         pipelineJson = await pipelineRes.json();
         const candidate = pipelineJson?.windows?.on?.[0];
