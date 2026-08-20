@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
-import WaterfallProfiles from "@/features/plots/WaterfallProfiles";
 import PoincareAitoffView from "@/features/plots/PoincareAitoffView";
 import PhaseSliceHistograms from "@/features/plots/PhaseSliceHistograms";
 import SinglePolarisationHistogram from "@/features/plots/SinglePolarisationHistogram";
 import PolarisationStacks from "@/features/plots/PolarisationStacks";
 import PolarisationDualView from "@/features/plots/PolarisationDualView";
-import RadiusOfCurvaturePlot from "@/features/plots/RadiusOfCurvaturePlot";
-import SubpulsePolarisationView from "@/features/plots/SubpulsePolarisationView";
+import TotalIntensityEvolution from "@/features/plots/TotalIntensityEvolution";
+import RvmFittingView from "@/features/plots/RvmFittingView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { CatalogueModal } from "./components/CatalogueModal";
 import {
@@ -19,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, Eye, EyeOff } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import {
   DEFAULT_MEERTIME_NPZ_URL,
   POLARISATION_QUANTITIES,
@@ -28,17 +27,19 @@ import {
   fetchPoincareAitoffData as requestPoincareAitoffData,
   fetchPolarisationHistograms as requestPolarisationHistograms,
   fetchPolarisationParams as requestPolarisationParams,
+  fetchRvmFit as requestRvmFit,
   fetchPolarisationStacks as requestPolarisationStacks,
   fetchProfilesData as requestProfilesData,
+  fetchTotalIntensityEvolution as requestTotalIntensityEvolution,
   isInvalidPhaseRange,
   isMeerTimeUrl,
   loadRemoteNpz,
   prepareDataset as requestPrepareDataset,
   type DatasetSource,
   type ObservationMetadata,
+  type OnPulseWindow,
 } from "@/api/polarimetryApi";
 import { useThemePreference } from "@/hooks/useThemePreference";
-import { useStaggeredThemeValue } from "@/hooks/useStaggeredThemeValue";
 import {
   persistDatasetBlob,
   persistPlotSettings,
@@ -51,10 +52,10 @@ import {
   writeRemoteAuthCookie,
 } from "@/lib/remoteAuthCookie";
 
-type PlotRequestKey = "profiles" | "heatmaps" | "polarParams" | "subpulseParams" | "polarHistograms" | "polarStacks" | "phaseSlices" | "aitoff";
+type PlotRequestKey = "profiles" | "heatmaps" | "totalIntensity" | "polarParams" | "subpulseParams" | "rvmFit" | "polarHistograms" | "polarStacks" | "phaseSlices" | "aitoff";
 type PlotRequestState = PlotRequestViewState & { version: number };
 type BackendResourceProfile = "safe" | "balanced" | "server";
-type PhaseControlsPlacement = "top" | "side";
+type AppPage = "analysis" | "readme";
 type CalculationPhaseWindow = { start: number; mid: number; end: number };
 type CalculationPhaseDraft = { start: string; mid: string; end: string };
 type QueuedPlotRequest = {
@@ -63,7 +64,7 @@ type QueuedPlotRequest = {
   version: number;
 };
 
-const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "polarParams", "subpulseParams", "polarHistograms", "polarStacks", "phaseSlices", "aitoff"];
+const PLOT_REQUEST_KEYS: PlotRequestKey[] = ["profiles", "heatmaps", "totalIntensity", "polarParams", "subpulseParams", "rvmFit", "polarHistograms", "polarStacks", "phaseSlices", "aitoff"];
 const PLOT_REQUEST_DEBOUNCE_MS = 350;
 const BACKEND_RESOURCE_PROFILES: Record<BackendResourceProfile, { concurrency: number; cooldownMs: number }> = {
   safe: { concurrency: 1, cooldownMs: 550 },
@@ -77,6 +78,26 @@ const PLOT_REQUEST_COOLDOWN_MS = getNonNegativeNumberEnv(import.meta.env.VITE_PL
 const ARTIFICIAL_LOADING_DELAY_MS = import.meta.env.DEV
   ? getNonNegativeNumberEnv(import.meta.env.VITE_TEST_LOADING_DELAY_MS, 0)
   : 0;
+const TOTAL_INTENSITY_VIEW_VERSION = 20;
+
+type AnalysisSectionKey = "totalIntensity" | "integrated" | "selectedPulse" | "allPulsesPhase" | "rvmFit" | "hist2d" | "pulseStacks" | "phaseSlices";
+
+const createCollapsedSections = (): Record<AnalysisSectionKey, boolean> => ({
+  totalIntensity: false,
+  integrated: false,
+  selectedPulse: false,
+  allPulsesPhase: false,
+  rvmFit: false,
+  hist2d: false,
+  pulseStacks: false,
+  phaseSlices: false,
+});
+
+const createOnPulseWindow = (start: number, end: number): OnPulseWindow => ({
+  start,
+  end,
+  mid: (start + end) / 2,
+});
 const delay = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
 const delayIfConfigured = () => ARTIFICIAL_LOADING_DELAY_MS > 0 ? delay(ARTIFICIAL_LOADING_DELAY_MS) : Promise.resolve();
 
@@ -101,14 +122,6 @@ function parseCalculationPhaseDraft(draft: CalculationPhaseDraft): CalculationPh
   return { start, mid, end };
 }
 
-function readPhaseControlsPlacement(): PhaseControlsPlacement {
-  try {
-    return localStorage.getItem("pulsar-prespidar-phase-controls-placement") === "side" ? "side" : "top";
-  } catch {
-    return "top";
-  }
-}
-
 function getPositiveIntegerEnv(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback;
@@ -129,8 +142,10 @@ function createPlotRequestStates(): Record<PlotRequestKey, PlotRequestState> {
   return {
     profiles: { status: "idle", version: 0 },
     heatmaps: { status: "idle", version: 0 },
+    totalIntensity: { status: "idle", version: 0 },
     polarParams: { status: "idle", version: 0 },
     subpulseParams: { status: "idle", version: 0 },
+    rvmFit: { status: "idle", version: 0 },
     polarHistograms: { status: "idle", version: 0 },
     polarStacks: { status: "idle", version: 0 },
     phaseSlices: { status: "idle", version: 0 },
@@ -157,18 +172,24 @@ const App: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [hasStoredRemoteCredentials, setHasStoredRemoteCredentials] = useState(Boolean(initialRemoteCredentials));
   const [showRemoteCredentialFields, setShowRemoteCredentialFields] = useState(isMeerTimeUrl(DEFAULT_MEERTIME_NPZ_URL) && !initialRemoteCredentials);
-  const [phaseControlsPlacement, setPhaseControlsPlacement] = useState<PhaseControlsPlacement>(() => readPhaseControlsPlacement());
+  const [activePage, setActivePage] = useState<AppPage>("analysis");
+  const [loadDataOpen, setLoadDataOpen] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(360);
+  const sidebarResizeRef = useRef(false);
   const [poincareAitoffData, setPoincareAitoffData] = useState<any>(null);
   const [phaseHistogramData, setPhaseHistogramData] = useState<any>(null);
   const [polHistogramData, setPolHistogramData] = useState<Record<string, any> | null>(null);
   const [polStacksData, setPolStacksData] = useState<any>(null);
   const [polarParamsData, setPolarParamsData] = useState<any>(null);
   const [subpulsePolarParamsData, setSubpulsePolarParamsData] = useState<any>(null);
+  const [rvmFitData, setRvmFitData] = useState<any>(null);
   const [startPhaseAitoff, setStartPhaseAitoff] = useState(0.0);
   const [endPhaseAitoff, setEndPhaseAitoff] = useState(1.0);
   const [startPhaseSubpulse, setStartPhaseSubpulse] = useState(0.0);
   const [endPhaseSubpulse, setEndPhaseSubpulse] = useState(1.0);
   const [selectedSubpulseIndex, setSelectedSubpulseIndex] = useState(0);
+  const [selectedSubpulseDraft, setSelectedSubpulseDraft] = useState("0");
   const [startPhasePolHist, setStartPhasePolHist] = useState(0.0);
   const [endPhasePolHist, setEndPhasePolHist] = useState(1.0);
   const [startPhasePolStacks, setStartPhasePolStacks] = useState(0.0);
@@ -179,33 +200,40 @@ const App: React.FC = () => {
   const [onPulseEndPolarParams, setOnPulseEndPolarParams] = useState(1.0);
   const [profilesData, setProfilesData] = useState<any>(null);
   const [heatmapsData, setHeatmapsData] = useState<any>(null);
+  const [totalIntensityData, setTotalIntensityData] = useState<any>(null);
   const [aitoffPhase, setAitoffPhase] = useState(0.0);
+  const [aitoffPhaseDraft, setAitoffPhaseDraft] = useState("0");
   const [leftPhaseHist, setLeftPhaseHist] = useState(0.0);
   const [midPhaseHist, setMidPhaseHist] = useState(0.5);
   const [rightPhaseHist, setRightPhaseHist] = useState(1.0);
-  const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const themeSwitchCleanupRef = useRef<number | null>(null);
   const [obsMetadata, setObsMetadata] = useState<ObservationMetadata | null>(null);
   const [isLoadingRemoteFile, setIsLoadingRemoteFile] = useState(false);
   const [isPreparingBackendDataset, setIsPreparingBackendDataset] = useState(false);
+  const [inputLoadError, setInputLoadError] = useState<string | null>(null);
   const [preparedDataKey, setPreparedDataKey] = useState<string | null>(null);
   const [datasetOnPulse, setDatasetOnPulse] = useState({ start: 0.0, end: 1.0 });
   const [loadedDatasetOnPulse, setLoadedDatasetOnPulse] = useState({ start: 0.0, end: 1.0 });
+  const [availableOnPulseWindows, setAvailableOnPulseWindows] = useState<OnPulseWindow[]>([createOnPulseWindow(0, 1)]);
+  const [activeOnPulseWindowIndex, setActiveOnPulseWindowIndex] = useState(0);
   const [calculationPhaseDraft, setCalculationPhaseDraft] = useState<CalculationPhaseDraft>(() => createCalculationPhaseDraft(0, 1, 0.5));
   const [calculationVersion, setCalculationVersion] = useState(0);
+  const [openSections, setOpenSections] = useState<Record<AnalysisSectionKey, boolean>>(createCollapsedSections);
   const [plotRequestStates, setPlotRequestStates] = useState<Record<PlotRequestKey, PlotRequestState>>(createPlotRequestStates);
   const activePlotRequestsRef = useRef(0);
   const queuedPlotRequestsRef = useRef<QueuedPlotRequest[]>([]);
   const plotRequestVersionsRef = useRef<Record<PlotRequestKey, number>>({
     profiles: 0,
     heatmaps: 0,
+    totalIntensity: 0,
     aitoff: 0,
     phaseSlices: 0,
     polarHistograms: 0,
     polarStacks: 0,
     polarParams: 0,
     subpulseParams: 0,
+    rvmFit: 0,
   });
 
   // Plot parameters
@@ -320,6 +348,7 @@ const App: React.FC = () => {
     setSubpulsePolarParamsData(null);
     setProfilesData(null);
     setHeatmapsData(null);
+    setTotalIntensityData(null);
   };
 
   const applyCalculationPhaseWindow = ({ start, mid, end }: CalculationPhaseWindow) => {
@@ -327,6 +356,7 @@ const App: React.FC = () => {
     setStartPhaseAitoff(start);
     setEndPhaseAitoff(end);
     setAitoffPhase(mid);
+    setAitoffPhaseDraft(String(mid));
     setStartPhaseSubpulse(start);
     setEndPhaseSubpulse(end);
     setStartPhasePolHist(start);
@@ -350,6 +380,8 @@ const App: React.FC = () => {
     incoming: File | Blob,
     nextPreparedDataKey: string | null = null,
     nextOnPulse: { start: number; end: number } = { start: 0, end: 1 },
+    nextOnPulseWindows: OnPulseWindow[] = [createOnPulseWindow(nextOnPulse.start, nextOnPulse.end)],
+    nextActiveWindowIndex = 0,
   ) => {
     const mid = (nextOnPulse.start + nextOnPulse.end) / 2;
     resetPlotRequestQueue();
@@ -357,10 +389,13 @@ const App: React.FC = () => {
     setPreparedDataKey(nextPreparedDataKey);
     setObsMetadata(null);
     setLoadedDatasetOnPulse(nextOnPulse);
+    setAvailableOnPulseWindows(nextOnPulseWindows.length ? nextOnPulseWindows : [createOnPulseWindow(nextOnPulse.start, nextOnPulse.end)]);
+    setActiveOnPulseWindowIndex(nextActiveWindowIndex);
     clearPlotData();
     applyCalculationPhaseWindow({ start: nextOnPulse.start, mid, end: nextOnPulse.end });
     setCalculationPhaseDraft(createCalculationPhaseDraft(nextOnPulse.start, nextOnPulse.end, mid));
     setSelectedSubpulseIndex(0);
+    setSelectedSubpulseDraft("0");
   };
 
   const prepareBackendDataset = async (incoming: File | Blob, onPulse: { start: number; end: number }) => {
@@ -371,6 +406,9 @@ const App: React.FC = () => {
       return prepared.data_key;
     } catch (error) {
       console.warn("Backend dataset preparation failed; falling back to per-request upload.", error);
+      if (!(incoming instanceof File)) {
+        throw error;
+      }
       return null;
     } finally {
       setIsPreparingBackendDataset(false);
@@ -387,6 +425,20 @@ const App: React.FC = () => {
   const handleUseDatasetOnPulse = () => {
     const mid = (loadedDatasetOnPulse.start + loadedDatasetOnPulse.end) / 2;
     setCalculationPhaseDraft(createCalculationPhaseDraft(loadedDatasetOnPulse.start, loadedDatasetOnPulse.end, mid));
+  };
+
+  const handleSelectOnPulseWindow = (index: number) => {
+    const nextWindow = availableOnPulseWindows[index];
+    if (!nextWindow) return;
+    resetPlotRequestQueue();
+    clearPlotData();
+    setActiveOnPulseWindowIndex(index);
+    setLoadedDatasetOnPulse({ start: nextWindow.start, end: nextWindow.end });
+    applyCalculationPhaseWindow({ start: nextWindow.start, mid: nextWindow.mid, end: nextWindow.end });
+    setCalculationPhaseDraft(createCalculationPhaseDraft(nextWindow.start, nextWindow.end, nextWindow.mid));
+    setSelectedSubpulseIndex(0);
+    setSelectedSubpulseDraft("0");
+    setCalculationVersion(version => version + 1);
   };
 
   const handleApplyCalculationPhaseWindow = async () => {
@@ -432,33 +484,6 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(false);
-  };
-
-  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragActive(false);
-    const droppedFile = e.dataTransfer?.files?.[0];
-    if (!droppedFile) return;
-    if (!droppedFile.name.toLowerCase().endsWith(".npz")) {
-      console.warn("Only .npz files are supported.");
-      return;
-    }
-    const defaultOnPulse = { start: 0, end: 1 };
-    const dataKey = await prepareBackendDataset(droppedFile, defaultOnPulse);
-    applyNewFile(droppedFile, dataKey, defaultOnPulse);
-    void persistDatasetBlob(droppedFile);
-  };
   const fetchPoincareAitoffData = async (requestVersion?: number) => {
     const source = getDatasetSource();
     if (!source) {
@@ -518,6 +543,7 @@ const App: React.FC = () => {
 
     const remoteUrl = url.trim();
     if (!remoteUrl) {
+      setInputLoadError("Please fill in the URL.");
       console.warn("Please fill in the URL.");
       return;
     }
@@ -533,6 +559,7 @@ const App: React.FC = () => {
         setHasStoredRemoteCredentials(false);
         setShowRemoteCredentialFields(true);
         setPassword("");
+        setInputLoadError("Please enter credentials for this URL.");
         console.warn("Please enter credentials for this URL.");
         return;
       }
@@ -544,18 +571,20 @@ const App: React.FC = () => {
 
       if (!credentials.username || !credentials.password) {
         setShowRemoteCredentialFields(true);
+        setInputLoadError("Please enter credentials for this URL.");
         console.warn("Please enter credentials for this URL.");
         return;
       }
     }
 
     setIsLoadingRemoteFile(true);
+    setInputLoadError(null);
     try {
       await delayIfConfigured();
       const remoteFile = await loadRemoteNpz(remoteUrl, credentials);
       const { start, end, mid } = remoteFile.onPulse;
       const dataKey = await prepareBackendDataset(remoteFile.blob, { start, end });
-      applyNewFile(remoteFile.blob, dataKey, { start, end });
+      applyNewFile(remoteFile.blob, dataKey, { start, end }, remoteFile.onPulseWindows, 0);
       if (credentials) {
         writeRemoteAuthCookie(remoteUrl, credentials);
         setHasStoredRemoteCredentials(true);
@@ -570,9 +599,11 @@ const App: React.FC = () => {
       setStartPhaseAitoff(start);
       setEndPhaseAitoff(end);
       setAitoffPhase(mid);
+      setAitoffPhaseDraft(String(mid));
       setStartPhaseSubpulse(start);
       setEndPhaseSubpulse(end);
       setSelectedSubpulseIndex(0);
+      setSelectedSubpulseDraft("0");
       setStartPhasePolHist(start);
       setEndPhasePolHist(end);
       setStartPhasePolStacks(start);
@@ -588,6 +619,7 @@ const App: React.FC = () => {
       void persistDatasetBlob(remoteFile.blob);
     } catch (err) {
       console.error("Error loading file:", err);
+      setInputLoadError(getErrorMessage(err));
       if (isRemoteAuthFailure(err)) {
         clearRemoteAuthCookie(remoteUrl);
         setHasStoredRemoteCredentials(false);
@@ -623,6 +655,31 @@ const App: React.FC = () => {
       if (err instanceof TypeError && err.message.includes("fetch")) {
         console.warn("Backend may be overloaded or unavailable (502). Try refreshing in a moment.");
       }
+      throw err;
+    }
+  };
+
+  const fetchTotalIntensityEvolution = async (requestVersion?: number) => {
+    const source = getDatasetSource();
+    if (!source) {
+      console.warn("No file selected or loaded.");
+      return;
+    }
+    if (isInvalidRange(startPhaseHeatmaps, endPhaseHeatmaps)) {
+      console.warn("Fix total intensity start/end phase: start must be <= end.");
+      return;
+    }
+
+    try {
+      const result = await requestTotalIntensityEvolution(source, {
+        start: startPhaseHeatmaps,
+        end: endPhaseHeatmaps,
+      }, datasetOnPulse);
+      if (isCurrentPlotRequest("totalIntensity", requestVersion)) {
+        setTotalIntensityData(result);
+      }
+    } catch (err) {
+      console.error("Error fetching total intensity evolution:", err);
       throw err;
     }
   };
@@ -771,6 +828,33 @@ const App: React.FC = () => {
     }
   };
 
+  const fetchRvmFit = async (requestVersion?: number) => {
+    const source = getDatasetSource();
+    if (!source) {
+      console.warn("No file selected or loaded.");
+      return;
+    }
+    if (isInvalidRange(startPhasePolarParams, endPhasePolarParams)) {
+      console.warn("Fix RVM fitting start/end: start must be <= end.");
+      return;
+    }
+
+    try {
+      setRvmFitData(null);
+      const result = await requestRvmFit(
+        source,
+        { start: startPhasePolarParams, end: endPhasePolarParams },
+        datasetOnPulse,
+      );
+      if (isCurrentPlotRequest("rvmFit", requestVersion)) {
+        setRvmFitData(result);
+      }
+    } catch (err) {
+      console.error("Error fetching RVM fit:", err);
+      throw err;
+    }
+  };
+
   // Call /phase_slice_histograms endpoint
   const fetchPhaseSliceHistograms = async (requestVersion?: number) => {
     const source = getDatasetSource();
@@ -835,11 +919,14 @@ const App: React.FC = () => {
         setShowRemoteCredentialFields(isMeerTimeUrl(savedUrl) && !savedRemoteCredentials);
         setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
         setDatasetOnPulse(savedSettings.datasetOnPulse);
+        setAvailableOnPulseWindows(savedSettings.availableOnPulseWindows?.length ? savedSettings.availableOnPulseWindows : [createOnPulseWindow(savedSettings.datasetOnPulse.start, savedSettings.datasetOnPulse.end)]);
+        setActiveOnPulseWindowIndex(savedSettings.activeOnPulseWindowIndex ?? 0);
         setStartPhaseAitoff(savedSettings.startPhaseAitoff);
         setEndPhaseAitoff(savedSettings.endPhaseAitoff);
         setStartPhaseSubpulse(savedSettings.startPhaseSubpulse ?? savedSettings.startPhaseAitoff);
         setEndPhaseSubpulse(savedSettings.endPhaseSubpulse ?? savedSettings.endPhaseAitoff);
         setSelectedSubpulseIndex(savedSettings.selectedSubpulseIndex ?? 0);
+        setSelectedSubpulseDraft(String(savedSettings.selectedSubpulseIndex ?? 0));
         setStartPhasePolHist(savedSettings.startPhasePolHist);
         setEndPhasePolHist(savedSettings.endPhasePolHist);
         setStartPhasePolStacks(savedSettings.startPhasePolStacks);
@@ -853,6 +940,7 @@ const App: React.FC = () => {
         setStartPhaseHeatmaps(savedSettings.startPhaseHeatmaps);
         setEndPhaseHeatmaps(savedSettings.endPhaseHeatmaps);
         setAitoffPhase(savedSettings.aitoffPhase);
+        setAitoffPhaseDraft(String(savedSettings.aitoffPhase));
         setLeftPhaseHist(savedSettings.leftPhaseHist);
         setMidPhaseHist(savedSettings.midPhaseHist);
         setRightPhaseHist(savedSettings.rightPhaseHist);
@@ -868,11 +956,14 @@ const App: React.FC = () => {
       applyNewFile(savedBlob, preparedKey, savedSettings?.datasetOnPulse ?? { start: 0, end: 1 });
       if (savedSettings) {
         setObsMetadata((savedSettings.obsMetadata as ObservationMetadata | null) ?? null);
+        setAvailableOnPulseWindows(savedSettings.availableOnPulseWindows?.length ? savedSettings.availableOnPulseWindows : [createOnPulseWindow(savedSettings.datasetOnPulse.start, savedSettings.datasetOnPulse.end)]);
+        setActiveOnPulseWindowIndex(savedSettings.activeOnPulseWindowIndex ?? 0);
         setStartPhaseAitoff(savedSettings.startPhaseAitoff);
         setEndPhaseAitoff(savedSettings.endPhaseAitoff);
         setStartPhaseSubpulse(savedSettings.startPhaseSubpulse ?? savedSettings.startPhaseAitoff);
         setEndPhaseSubpulse(savedSettings.endPhaseSubpulse ?? savedSettings.endPhaseAitoff);
         setSelectedSubpulseIndex(savedSettings.selectedSubpulseIndex ?? 0);
+        setSelectedSubpulseDraft(String(savedSettings.selectedSubpulseIndex ?? 0));
         setStartPhasePolHist(savedSettings.startPhasePolHist);
         setEndPhasePolHist(savedSettings.endPhasePolHist);
         setStartPhasePolStacks(savedSettings.startPhasePolStacks);
@@ -886,6 +977,7 @@ const App: React.FC = () => {
         setStartPhaseHeatmaps(savedSettings.startPhaseHeatmaps);
         setEndPhaseHeatmaps(savedSettings.endPhaseHeatmaps);
         setAitoffPhase(savedSettings.aitoffPhase);
+        setAitoffPhaseDraft(String(savedSettings.aitoffPhase));
         setLeftPhaseHist(savedSettings.leftPhaseHist);
         setMidPhaseHist(savedSettings.midPhaseHist);
         setRightPhaseHist(savedSettings.rightPhaseHist);
@@ -911,12 +1003,33 @@ const App: React.FC = () => {
   }, [url]);
 
   useEffect(() => {
-    if (!file) return;
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!sidebarResizeRef.current) return;
+      const maxWidth = Math.max(280, window.innerWidth * 0.3);
+      const nextWidth = Math.min(maxWidth, Math.max(280, event.clientX));
+      setSidebarWidth(nextWidth);
+    };
+    const handlePointerUp = () => {
+      sidebarResizeRef.current = false;
+      document.body.classList.remove("is-resizing-plots");
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!file || !openSections.integrated) return;
     persistPlotSettings({
       url,
       username,
       obsMetadata,
       datasetOnPulse,
+      availableOnPulseWindows,
+      activeOnPulseWindowIndex,
       startPhaseAitoff,
       endPhaseAitoff,
       startPhaseSubpulse,
@@ -940,7 +1053,7 @@ const App: React.FC = () => {
       rightPhaseHist,
     });
   }, [
-    file, url, username, obsMetadata, datasetOnPulse, startPhaseAitoff, endPhaseAitoff,
+    file, url, username, obsMetadata, datasetOnPulse, availableOnPulseWindows, activeOnPulseWindowIndex, startPhaseAitoff, endPhaseAitoff,
     startPhaseSubpulse, endPhaseSubpulse, selectedSubpulseIndex,
     startPhasePolHist, endPhasePolHist, startPhasePolStacks, endPhasePolStacks,
     startPhasePolarParams, endPhasePolarParams, onPulseStartPolarParams, onPulseEndPolarParams,
@@ -955,29 +1068,38 @@ const App: React.FC = () => {
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [startPhaseProfiles, endPhaseProfiles, calculationVersion, file]);
+  }, [startPhaseProfiles, endPhaseProfiles, calculationVersion, file, openSections.integrated]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.pulseStacks) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("heatmaps", fetchHeatmapsData),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [startPhaseHeatmaps, endPhaseHeatmaps, calculationVersion, file]);
+  }, [startPhaseHeatmaps, endPhaseHeatmaps, calculationVersion, file, openSections.pulseStacks]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.totalIntensity) return;
+    const t = window.setTimeout(
+      () => schedulePlotRequest("totalIntensity", fetchTotalIntensityEvolution),
+      PLOT_REQUEST_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [startPhaseHeatmaps, endPhaseHeatmaps, calculationVersion, datasetOnPulse.start, datasetOnPulse.end, file, openSections.totalIntensity, TOTAL_INTENSITY_VIEW_VERSION]);
+
+  useEffect(() => {
+    if (!file || !openSections.integrated) return;
     if (isInvalidRange(onPulseStartPolarParams, onPulseEndPolarParams)) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("polarParams", fetchPolarisationParams),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams, calculationVersion]);
+  }, [file, onPulseStartPolarParams, onPulseEndPolarParams, startPhasePolarParams, endPhasePolarParams, calculationVersion, openSections.integrated]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.selectedPulse) return;
     if (isInvalidRange(startPhaseSubpulse, endPhaseSubpulse)) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("subpulseParams", fetchSubpulsePolarisationParams),
@@ -992,48 +1114,60 @@ const App: React.FC = () => {
     datasetOnPulse.start,
     datasetOnPulse.end,
     calculationVersion,
+    openSections.selectedPulse,
   ]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.rvmFit) return;
+    if (isInvalidRange(startPhasePolarParams, endPhasePolarParams)) return;
+    const t = window.setTimeout(
+      () => schedulePlotRequest("rvmFit", fetchRvmFit),
+      PLOT_REQUEST_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [file, startPhasePolarParams, endPhasePolarParams, datasetOnPulse.start, datasetOnPulse.end, calculationVersion, openSections.rvmFit]);
+
+  useEffect(() => {
+    if (!file || !openSections.hist2d) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("polarHistograms", fetchPolarisationHistograms),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, startPhasePolHist, endPhasePolHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
+  }, [file, startPhasePolHist, endPhasePolHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end, openSections.hist2d]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.pulseStacks) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("polarStacks", fetchPolarisationStacks),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, startPhasePolStacks, endPhasePolStacks, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
+  }, [file, startPhasePolStacks, endPhasePolStacks, calculationVersion, datasetOnPulse.start, datasetOnPulse.end, openSections.pulseStacks]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.phaseSlices) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("phaseSlices", fetchPhaseSliceHistograms),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end]);
+  }, [file, leftPhaseHist, midPhaseHist, rightPhaseHist, calculationVersion, datasetOnPulse.start, datasetOnPulse.end, openSections.phaseSlices]);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file || !openSections.allPulsesPhase) return;
     const t = window.setTimeout(
       () => schedulePlotRequest("aitoff", fetchPoincareAitoffData),
       PLOT_REQUEST_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(t);
-  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, calculationVersion, file]);
+  }, [aitoffPhase, startPhaseAitoff, endPhaseAitoff, calculationVersion, file, openSections.allPulsesPhase]);
 
   const polarParamsState = getCombinedPlotState("polarParams");
+  const totalIntensityState = getCombinedPlotState("totalIntensity");
   const subpulseParamsState = getCombinedPlotState("subpulseParams");
-  const profilesState = getCombinedPlotState("profiles", "heatmaps");
-  const stacksState = getCombinedPlotState("polarStacks");
+  const rvmFitState = getCombinedPlotState("rvmFit");
+  const stacksState = getCombinedPlotState("polarStacks", "heatmaps");
   const histogramsState = getCombinedPlotState("polarHistograms");
   const phaseSlicesState = getCombinedPlotState("phaseSlices");
   const aitoffState = getCombinedPlotState("aitoff");
@@ -1053,16 +1187,122 @@ const App: React.FC = () => {
     || parsedCalculationPhaseDraft.end > 1;
   const appliedPhaseSummary = `${startPhaseProfiles.toFixed(3)} - ${midPhaseHist.toFixed(3)} - ${endPhaseProfiles.toFixed(3)}`;
   const totalSubpulses = Number(subpulsePolarParamsData?.num_pulses ?? polarParamsData?.num_pulses ?? 0);
+  const totalPulseCount = totalSubpulses || Number(poincareAitoffData?.pulse_number?.length ?? 0);
+  const hasInterpulseWindows = availableOnPulseWindows.length > 1;
+  const topPulsePower = (subpulsePolarParamsData?.top_pulse_power ?? polarParamsData?.top_pulse_power ?? []) as Array<{
+    pulse_index: number;
+    pulse_number?: number;
+    pulse_power: number;
+  }>;
+  const fixedPhaseAitoffData = React.useMemo(() => {
+    if (!poincareAitoffData) return null;
+    const hasStokes = ["I", "Q", "U", "V"].every(key => (
+      Array.isArray(poincareAitoffData?.[key]) && poincareAitoffData[key].length > 0
+    ));
+    if (hasStokes || !heatmapsData?.I?.pulse_phase?.length) return poincareAitoffData;
+
+    const phases = heatmapsData.I.pulse_phase as number[];
+    let phaseIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    phases.forEach((phase, index) => {
+      const distance = Math.abs(Number(phase) - aitoffPhase);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        phaseIndex = index;
+      }
+    });
+
+    const stokesAtPhase = (label: "I" | "Q" | "U" | "V") => {
+      const rows = heatmapsData?.[label]?.heatmap_data;
+      if (!Array.isArray(rows)) return [];
+      return rows.map((row: unknown) => (
+        Array.isArray(row) && Number.isFinite(Number(row[phaseIndex])) ? Number(row[phaseIndex]) : null
+      ));
+    };
+
+    return {
+      ...poincareAitoffData,
+      pulse_number: poincareAitoffData.pulse_number ?? heatmapsData.I.pulse_number ?? [],
+      I: stokesAtPhase("I"),
+      Q: stokesAtPhase("Q"),
+      U: stokesAtPhase("U"),
+      V: stokesAtPhase("V"),
+    };
+  }, [aitoffPhase, heatmapsData, poincareAitoffData]);
+  const combinedPulseStacksData = React.useMemo(() => {
+    const polarQuantities = Array.isArray(polStacksData?.quantities) ? polStacksData.quantities : [];
+    const heatmapQuantity = (label: "I" | "Q" | "U" | "V") => {
+      const heatmap = heatmapsData?.[label];
+      if (!heatmap) return null;
+      return {
+        name: label,
+        data: heatmap.heatmap_data ?? [],
+        vmin: heatmap.vmin,
+        vmax: heatmap.vmax,
+      };
+    };
+    const quantityByName = new Map<string, any>();
+    polarQuantities.forEach((quantity: any) => {
+      if (quantity?.key) quantityByName.set(quantity.key, quantity);
+      if (quantity?.name) quantityByName.set(quantity.name, quantity);
+    });
+    (["I", "Q", "U", "V"] as const).forEach(label => {
+      const quantity = heatmapQuantity(label);
+      if (quantity) quantityByName.set(label, quantity);
+    });
+
+    const orderedQuantities = ["PA", "EA", "P/I", "L/I", "V/I", "|V/I|", "I", "V", "Q", "U"]
+      .map(name => quantityByName.get(name))
+      .filter(Boolean);
+    if (!orderedQuantities.length) return null;
+    const referenceHeatmap = heatmapsData?.I ?? heatmapsData?.Q ?? heatmapsData?.U ?? heatmapsData?.V;
+    return {
+      obs_id: polStacksData?.obs_id ?? referenceHeatmap?.obs_id,
+      start_phase: polStacksData?.start_phase ?? startPhaseProfiles,
+      end_phase: polStacksData?.end_phase ?? endPhaseProfiles,
+      on_pulse: polStacksData?.on_pulse,
+      phase_axis: polStacksData?.phase_axis ?? referenceHeatmap?.pulse_phase ?? [],
+      pulse_number: polStacksData?.pulse_number ?? referenceHeatmap?.pulse_number ?? [],
+      quantities: orderedQuantities,
+      warning: polStacksData?.warning,
+    };
+  }, [endPhaseProfiles, heatmapsData, polStacksData, startPhaseProfiles]);
+  const observationFilenameBase = React.useMemo(() => {
+    const raw = obsMetadata?.obsId || "observation";
+    return raw.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "observation";
+  }, [obsMetadata?.obsId]);
+  const phaseToken = (value: number) => Number.isFinite(value) ? value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "") : "nan";
+  const selectedPulseFilenameBase = `${observationFilenameBase}_for_pulse_index_${selectedSubpulseIndex}`;
+  const selectedPhaseFilenameBase = `${observationFilenameBase}_at_phase_${phaseToken(aitoffPhase)}`;
+  const phaseSliceFilenameBase = `${observationFilenameBase}_left_${phaseToken(leftPhaseHist)}_middle_${phaseToken(midPhaseHist)}_right_${phaseToken(rightPhaseHist)}`;
+  const loadSelectedSubpulseDraft = () => {
+    const requestedIndex = Math.max(0, Math.floor(Number(selectedSubpulseDraft) || 0));
+    const nextIndex = totalSubpulses > 0 ? Math.min(requestedIndex, Math.max(0, totalSubpulses - 1)) : requestedIndex;
+    setSelectedSubpulseDraft(String(nextIndex));
+    if (nextIndex === selectedSubpulseIndex) return;
+    setSelectedSubpulseIndex(nextIndex);
+    setSubpulsePolarParamsData(null);
+  };
+  const loadAitoffPhaseDraft = () => {
+    const requestedPhase = Number(aitoffPhaseDraft);
+    const finitePhase = Number.isFinite(requestedPhase) ? requestedPhase : aitoffPhase;
+    const nextPhase = Math.min(endPhaseAitoff, Math.max(startPhaseAitoff, finitePhase));
+    setAitoffPhaseDraft(String(nextPhase));
+    if (nextPhase === aitoffPhase) return;
+    setAitoffPhase(nextPhase);
+    setPoincareAitoffData(null);
+  };
   const isMeerTimeLink = isMeerTimeUrl(url.trim());
   const shouldOfferRemoteCredentials = isMeerTimeLink || hasStoredRemoteCredentials || showRemoteCredentialFields;
   const shouldShowRemoteCredentialFields = shouldOfferRemoteCredentials && (!hasStoredRemoteCredentials || showRemoteCredentialFields);
-  const profilesPlotThemeIsDark = useStaggeredThemeValue(isDark, 80);
-  const polarParamsPlotThemeIsDark = useStaggeredThemeValue(isDark, 160);
-  const subpulsePlotThemeIsDark = useStaggeredThemeValue(isDark, 240);
-  const histogramsPlotThemeIsDark = useStaggeredThemeValue(isDark, 320);
-  const stacksPlotThemeIsDark = useStaggeredThemeValue(isDark, 400);
-  const phaseSlicesPlotThemeIsDark = useStaggeredThemeValue(isDark, 480);
-  const aitoffPlotThemeIsDark = useStaggeredThemeValue(isDark, 560);
+  const polarParamsPlotThemeIsDark = isDark;
+  const subpulsePlotThemeIsDark = isDark;
+  const histogramsPlotThemeIsDark = isDark;
+  const stacksPlotThemeIsDark = isDark;
+  const totalIntensityPlotThemeIsDark = isDark;
+  const phaseSlicesPlotThemeIsDark = isDark;
+  const aitoffPlotThemeIsDark = isDark;
+  const rvmFitPlotThemeIsDark = isDark;
 
   const handleChangeRemoteCredentials = () => {
     const savedRemoteCredentials = readRemoteAuthCookie(url.trim());
@@ -1081,15 +1321,6 @@ const App: React.FC = () => {
     setPassword("");
   };
 
-  const handlePhaseControlsPlacementChange = (nextPlacement: PhaseControlsPlacement) => {
-    setPhaseControlsPlacement(nextPlacement);
-    try {
-      localStorage.setItem("pulsar-prespidar-phase-controls-placement", nextPlacement);
-    } catch {
-      // Placement persistence is optional; the active state still updates.
-    }
-  };
-
   const applyThemeImmediately = (nextIsDark: boolean) => {
     try {
       const root = document.documentElement;
@@ -1103,7 +1334,7 @@ const App: React.FC = () => {
       themeSwitchCleanupRef.current = window.setTimeout(() => {
         root.classList.remove("theme-switching");
         themeSwitchCleanupRef.current = null;
-      }, 360);
+      }, 140);
     } catch {
       // Theme feedback is best-effort; React state remains the source of truth.
     }
@@ -1112,8 +1343,30 @@ const App: React.FC = () => {
   const handleToggleTheme = () => {
     const nextIsDark = !document.documentElement.classList.contains("dark");
     applyThemeImmediately(nextIsDark);
-    setIsDark(nextIsDark);
+    React.startTransition(() => setIsDark(nextIsDark));
   };
+
+  const handleOpenLoadData = () => {
+    setActivePage("analysis");
+    setSidebarCollapsed(false);
+    setLoadDataOpen(true);
+  };
+
+  const renderSectionHeading = (sectionKey: AnalysisSectionKey, title: string, state: PlotRequestViewState) => (
+    <CollapsibleTrigger asChild>
+      <button
+        type="button"
+        className="section-heading-row collapsible-section-trigger"
+        aria-expanded={openSections[sectionKey]}
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${openSections[sectionKey] ? "" : "-rotate-90"}`} />
+          <span className="section-title">{title}</span>
+        </span>
+        <PlotStatusBadge state={state} />
+      </button>
+    </CollapsibleTrigger>
+  );
 
   return (
     <div className="min-h-screen w-full flex flex-col">
@@ -1125,148 +1378,61 @@ const App: React.FC = () => {
           setCatalogueModalOpen(false);
         }}
       />
-      <header className="page-hero max-w-[1600px] mx-auto w-full px-8 sm:px-10 xl:px-12 pt-8 pb-4 flex flex-col gap-3">
-        <div className="w-full flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className="page-title font-bold text-foreground">Pulsar-PReSPIDAR</h1>
-            <p className="page-subtitle mt-1 font-semibold text-foreground">
-              Pulsar-Polarisation REsolved Single Pulse Interactive Data AnalyseR
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 md:ml-4">
-            {/* <Button variant="outline" onClick={() => setCatalogueModalOpen(true)}>
-              Browse Catalogue
-            </Button> */}
-            <button
-              type="button"
-              onClick={handleToggleTheme}
-              className={`theme-orbit-toggle ${isDark ? "is-dark" : "is-light"}`}
-              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              <span className="theme-orbit-track" aria-hidden="true">
-                <span className="theme-orbit-core theme-pulsar-core">
-                  <span className="theme-pulsar-star" />
-                  <span className="theme-pulsar-beam theme-pulsar-beam-a" />
-                </span>
+      <main className="page-shell w-full p-0">
+        <div
+          className={`analysis-workspace ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}
+          style={{ ["--analysis-sidebar-width" as string]: `${sidebarWidth}px` }}
+        >
+        <aside className="analysis-sidebar" aria-label="Analysis controls">
+          <button
+            type="button"
+            className="analysis-sidebar-collapse"
+            onClick={() => setSidebarCollapsed(current => !current)}
+            aria-label={sidebarCollapsed ? "Expand analysis sidebar" : "Collapse analysis sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+          {!sidebarCollapsed && (
+          <div className="analysis-sidebar-scroll">
+          <Collapsible open={loadDataOpen} onOpenChange={setLoadDataOpen}>
+          <section className="upload-stage sidebar-section">
+          <CollapsibleTrigger asChild>
+            <button type="button" className="section-heading-row collapsible-section-trigger mb-3" aria-expanded={loadDataOpen}>
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${loadDataOpen ? "" : "-rotate-90"}`} />
+                <span className="section-title">Load Data</span>
               </span>
             </button>
-          </div>
-        </div>
-        <div className="page-intro text-left text-foreground mb-2">
-          An open-source data-analysis tool for visualizing and exploring single-pulse polarimetry data from the
-          <a
-            href="https://psrweb.jb.man.ac.uk/meertime/singlepulse/"
-            className="underline text-accent ml-1"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            MeerTime Single Pulse Database
-          </a>.
-        </div>
-        <Collapsible className="details-collapsible">
-          <CollapsibleTrigger asChild>
-            <button type="button" className="details-trigger mx-auto">
-              <span>Details</span>
-              <ChevronDown className="details-trigger-icon h-4 w-4" />
-            </button>
           </CollapsibleTrigger>
+          {loadDataOpen && (
           <CollapsibleContent>
-            <div className="details-body mt-4 space-y-3 text-foreground">
-              <div><b>Default MeerTime Link:</b></div>
-              <div className="break-all bg-card p-2 rounded text-foreground">
-                https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz
-              </div>
-              <div className="space-y-2 leading-relaxed">
-                <div className="details-heading text-foreground">What this tool does</div>
-                <p>
-                  This tool lets you upload pulsar single-pulse data in .npy or .npz format (as available from the MeerTime database), and generates a series of interactive visualizations to explore the polarization state of the pulsar signal.
-                </p>
-                <div className="details-heading text-foreground">Features (as of January 02, 2026)</div>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Waterfall plots and integrated profiles of each Stokes parameter.</li>
-                  <li>Individual pulse profiles for selected pulse indices.</li>
-                  <li>Polarization parameter vs pulse phase integrated over all pulses.</li>
-                  <li>Pulse stacks of polarization parameters.</li>
-                  <li><a href="https://ui.adsabs.harvard.edu/abs/2023MNRAS.524.5558O/abstract" target="_blank" rel="noopener noreferrer" className="underline text-accent">Oswald et al. (2023)</a> 2|EA| v/s P/I plot for partial coherence model checks.</li>
-                  <li>2D histograms of polarization parameters with 1D histograms for specific phases.</li>
-                  <li>Trajectories of polarization state on the Poincare sphere (Aitoff and 3D) for integrated and individual subpulses.</li>
-                  <li>Polarization states on the Poincare sphere at a fixed phase for all pulses (inspect O/X mode clustering).</li>
-                  <li>Linear polarisation parameter is bias-corrected.</li>
-                  <li>Radius of curvature (circle fitting) of the polarization trajectory vs pulse phase.</li>
-                  <li>For uploaded numpy files, on-pulse window is inferred from noise floor as a fraction of peak integrated intensity (user input).</li>
-                  <li>For data fetched from MeerTime URL, on-pulse is inferred automatically.</li>
-                </ul>
-                <div className="details-heading text-foreground">Abbreviations</div>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>I, Q, U, V are the four Stokes parameters.</li>
-                  <li>PA is polarisation angle; EA is ellipticity angle.</li>
-                  <li>L is linear polarisation; P is total polarisation; lowercase l and p are fractional counterparts.</li>
-                </ul>
-                <div className="details-heading text-foreground">Contact</div>
-                <p>Need help or suggestions? Reach out to <a href="mailto:pmarmat@ph.iitr.ac.in" className="underline text-accent">Piyush Marmat</a>.</p>
-              </div>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
-      </header>
-      <main className="page-shell max-w-[1600px] mx-auto w-full px-8 pb-14 pt-4 sm:px-10 xl:px-12 flex flex-col gap-8">
-        <section className="upload-stage">
-          <div className="section-heading-row mb-5">
-            <h2 className="section-title">Load Data</h2>
-          </div>
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="grid grid-cols-1 gap-4">
                 <div className="flex flex-col gap-2">
                   <Label className="form-label text-foreground">Upload file</Label>
-                  <div
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={handleBrowseClick}
-                    onDragOver={handleDragOver}
-                    onDragEnter={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    className={`upload-dropzone mt-1 ${isDragActive ? "is-drag-active" : ""}`}
+                    disabled={isPreparingInput}
+                    className="sidebar-upload-button"
                   >
-                    <div className={`upload-mascot ${isDragActive ? "is-excited" : ""}`} aria-hidden="true">
-                      <div className="upload-mascot-ears">
-                        <span />
-                        <span />
-                      </div>
-                      <div className="upload-mascot-head">
-                        <span className="upload-mascot-eye upload-mascot-eye-left" />
-                        <span className="upload-mascot-eye upload-mascot-eye-right" />
-                        <span className="upload-mascot-mouth" />
-                      </div>
-                      <div className="upload-mascot-arms">
-                        <span className="upload-mascot-arm upload-mascot-arm-left" />
-                        <span className="upload-mascot-arm upload-mascot-arm-right" />
-                      </div>
-                    </div>
-                    <div className="upload-dropzone-copy">
-                      <span className="font-semibold text-foreground">
-                        {isDragActive ? "Drop your .npz file here" : "Click or drag a .npz file"}
-                      </span>
-                      <span className="form-help mt-2 text-foreground/80">
-                        {isPreparingInput
-                          ? "Loading data into the analysis pipeline..."
-                          : isDragActive
-                            ? "Our catcher is ready."
-                            : "Only `.npz` is accepted"}
-                      </span>
-                    </div>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".npz"
-                      onChange={handleFileChange}
-                      className="hidden"
-                    />
-                  </div>
+                    {isPreparingInput ? "Loading file..." : "Upload .npz file"}
+                  </Button>
+                  <span className="form-help text-foreground/80">Only `.npz` is accepted</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".npz"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
                 </div>
 
                 <div className="flex flex-col gap-5">
                   <div className="flex flex-col gap-2">
                     <Label className="form-label text-foreground">File URL</Label>
-                    <Input className="field-shell" type="text" placeholder="File URL" value={url} onChange={e => setUrl(e.target.value)} />
+                    <Input className="field-shell" type="text" placeholder="File URL" value={url} onChange={e => { setUrl(e.target.value); setInputLoadError(null); }} />
                   </div>
 
                   {shouldOfferRemoteCredentials && (
@@ -1275,7 +1441,7 @@ const App: React.FC = () => {
                         <>
                           <div>
                             <Label className="form-label text-foreground">Username</Label>
-                            <Input className="field-shell" type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+                            <Input className="field-shell" type="text" placeholder="Username" value={username} onChange={e => { setUsername(e.target.value); setInputLoadError(null); }} />
                           </div>
                           <div>
                             <Label className="form-label text-foreground">Password</Label>
@@ -1284,7 +1450,7 @@ const App: React.FC = () => {
                                 type={showPassword ? "text" : "password"}
                                 placeholder="Password"
                                 value={password}
-                                onChange={e => setPassword(e.target.value)}
+                                onChange={e => { setPassword(e.target.value); setInputLoadError(null); }}
                                 className="field-shell pr-12"
                               />
                               <button
@@ -1327,14 +1493,20 @@ const App: React.FC = () => {
                           : "Load from URL"}
                     </Button>
                   </div>
+                  {inputLoadError && (
+                    <div className="validation-note load-error-message" role="alert">
+                      {inputLoadError}
+                    </div>
+                  )}
                 </div>
           </div>
-
+        </CollapsibleContent>
+          )}
         </section>
+        </Collapsible>
 
         {hasLoadedData && (
-          <>
-            <div className={phaseControlsPlacement === "side" ? "phase-control-dock phase-control-dock-side" : "phase-control-dock phase-control-dock-top"}>
+            <section className="sidebar-section">
               <Collapsible defaultOpen className="phase-control-bar">
                 <div className="phase-control-shell">
                   <div className="phase-control-header">
@@ -1347,27 +1519,43 @@ const App: React.FC = () => {
                         <ChevronDown className="phase-control-icon h-4 w-4" />
                       </button>
                     </CollapsibleTrigger>
-                    <div className="phase-control-placement" aria-label="Phase control position">
-                      <button
-                        type="button"
-                        className={`phase-control-placement-button ${phaseControlsPlacement === "top" ? "is-active" : ""}`}
-                        aria-pressed={phaseControlsPlacement === "top"}
-                        onClick={() => handlePhaseControlsPlacementChange("top")}
-                      >
-                        Top
-                      </button>
-                      <button
-                        type="button"
-                        className={`phase-control-placement-button ${phaseControlsPlacement === "side" ? "is-active" : ""}`}
-                        aria-pressed={phaseControlsPlacement === "side"}
-                        onClick={() => handlePhaseControlsPlacementChange("side")}
-                      >
-                        Side
-                      </button>
-                    </div>
                   </div>
                   <CollapsibleContent>
                     <div className="phase-control-content">
+                      <div className="phase-control-meta">
+                        {obsMetadata && (
+                          <>
+                            <div><span>Obs ID</span>{obsMetadata.obsId}</div>
+                            <div><span>Frequency</span>{obsMetadata.freq} MHz</div>
+                            <div><span>UTC Start</span>{obsMetadata.utcStart}</div>
+                          </>
+                        )}
+                        <div><span>Phase window</span>{startPhaseProfiles.toFixed(3)} - {endPhaseProfiles.toFixed(3)}</div>
+                        <div><span>Pulse windows</span>{availableOnPulseWindows.map((windowValue, index) => `${index + 1}: ${windowValue.start.toFixed(3)}-${windowValue.end.toFixed(3)}`).join(" | ")}</div>
+                        {hasInterpulseWindows && (
+                          <div><span>Interpulse</span>Detected ({availableOnPulseWindows.length} on-pulse windows)</div>
+                        )}
+                        <div><span>Fixed phase</span>{aitoffPhase.toFixed(3)}</div>
+                        <div><span>On-pulse window</span>{onPulseStartPolarParams.toFixed(3)} - {onPulseEndPolarParams.toFixed(3)}</div>
+                        <div><span>Total pulses</span>{totalPulseCount > 0 ? totalPulseCount.toLocaleString() : "loading"}</div>
+                      </div>
+                      {hasInterpulseWindows && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="form-label text-foreground/80">Analyse on-pulse window</span>
+                          {availableOnPulseWindows.map((windowValue, index) => (
+                            <Button
+                              key={`${windowValue.start}-${windowValue.end}-${index}`}
+                              type="button"
+                              variant={activeOnPulseWindowIndex === index ? "default" : "outline"}
+                              size="sm"
+                              disabled={isPreparingInput}
+                              onClick={() => handleSelectOnPulseWindow(index)}
+                            >
+                              {index === 0 ? "Main pulse" : `Interpulse ${index}`} {windowValue.start.toFixed(3)}-{windowValue.end.toFixed(3)}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
                       <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-3">
                         <div>
                           <Label className="form-label text-foreground">Start phase</Label>
@@ -1424,10 +1612,75 @@ const App: React.FC = () => {
                   </CollapsibleContent>
                 </div>
               </Collapsible>
-            </div>
+            </section>
+        )}
+          </div>
+          )}
+          {!sidebarCollapsed && (
+            <div
+              className="analysis-sidebar-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              onPointerDown={event => {
+                event.preventDefault();
+                sidebarResizeRef.current = true;
+                document.body.classList.add("is-resizing-plots");
+              }}
+            />
+          )}
+        </aside>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <h2 className="section-title">Plots</h2>
+        <section className="analysis-content">
+          <header className="page-hero w-full flex flex-col gap-2">
+            <div className="w-full flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0 flex-1">
+                <h1 className="page-title font-bold text-foreground">Pulsar-PReSPIDAR</h1>
+                <p className="page-subtitle mt-0.5 font-semibold text-foreground">
+                  Pulsar-Polarisation REsolved Single Pulse Interactive Data AnalyseR
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 md:ml-4">
+                <nav className="app-nav" aria-label="Application navigation">
+                  <button type="button" className={`app-nav-button ${activePage === "analysis" ? "is-active" : ""}`} onClick={handleOpenLoadData}>
+                    Analysis
+                  </button>
+                  <button type="button" className={`app-nav-button ${activePage === "readme" ? "is-active" : ""}`} onClick={() => setActivePage("readme")}>
+                    Read Me
+                  </button>
+                </nav>
+                <button
+                  type="button"
+                  onClick={handleToggleTheme}
+                  className={`theme-orbit-toggle ${isDark ? "is-dark" : "is-light"}`}
+                  aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                  title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                >
+                  <span className="theme-orbit-track" aria-hidden="true">
+                    <span className="theme-orbit-core theme-pulsar-core">
+                      <span className="theme-pulsar-star" />
+                      <span className="theme-pulsar-beam theme-pulsar-beam-a" />
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </div>
+            <div className="page-intro text-left text-foreground">
+              An open-source data-analysis tool for visualizing and exploring single-pulse data from the
+              <a
+                href="https://psrweb.jb.man.ac.uk/meertime/singlepulse/"
+                className="underline text-accent ml-1"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                MeerTime Single Pulse Database
+              </a>.
+            </div>
+          </header>
+        {activePage === "readme" && <ReadMePage />}
+        {activePage === "analysis" && hasLoadedData && (
+          <>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
               <QueueStatusSummary
                 concurrency={PLOT_REQUEST_CONCURRENCY}
                 queuedCount={queuedPlotCount}
@@ -1436,56 +1689,38 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-8">
-              {/* Profiles + Heatmaps (integrated) */}
+              {/* Total intensity evolution */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Waterfall profiles and integrated heatmaps</h2>
-                      <PlotStatusBadge state={profilesState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase window: {startPhaseProfiles.toFixed(3)} - {endPhaseProfiles.toFixed(3)}</div>
-                    </div>
+                    <Collapsible open={openSections.totalIntensity} onOpenChange={open => setOpenSections(current => ({ ...current, totalIntensity: open }))}>
+                    {renderSectionHeading("totalIntensity", "Total Intensity Evolution", totalIntensityState)}
+                    {openSections.totalIntensity && (
+                    <CollapsibleContent>
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={profilesState} label="Waterfall profiles and heatmaps" hasData={!!profilesData} deferUntilVisible placeholderMinHeight="32rem">
+                      <PlotResultSlot state={totalIntensityState} label="Total intensity evolution" hasData={!!totalIntensityData} deferUntilVisible placeholderMinHeight="40rem">
                         <ErrorBoundary>
-                          {profilesData && (
-                            <WaterfallProfiles
-                              data={profilesData}
-                              heatmaps={heatmapsData}
-                              startPhase={startPhaseProfiles}
-                              endPhase={endPhaseProfiles}
-                              isDark={profilesPlotThemeIsDark}
+                          {totalIntensityData && (
+                            <TotalIntensityEvolution
+                              data={totalIntensityData}
+                              isDark={totalIntensityPlotThemeIsDark}
+                              filenamePrefix={observationFilenameBase}
                             />
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
-              {/* Polarisation parameters + Poincare dual view */}
+              {/* Integrated pulse profile polarisation state evolution */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Polarisation parameters, Poincare view, and custom plots</h2>
-                      <PlotStatusBadge state={polarParamsState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase window: {startPhasePolarParams.toFixed(3)} - {endPhasePolarParams.toFixed(3)}</div>
-                      <div>On-pulse window: {onPulseStartPolarParams.toFixed(3)} - {onPulseEndPolarParams.toFixed(3)}</div>
-                    </div>
+                    <Collapsible open={openSections.integrated} onOpenChange={open => setOpenSections(current => ({ ...current, integrated: open }))}>
+                    {renderSectionHeading("integrated", "Polarisation State Evolution: Integrated Pulse Profile", polarParamsState)}
+                    {openSections.integrated && (
+                    <CollapsibleContent>
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={polarParamsState} label="Polarisation parameters" hasData={!!polarParamsData?.dataset?.length} deferUntilVisible placeholderMinHeight="40rem">
+                      <PlotResultSlot state={polarParamsState} label="Integrated pulse profile polarisation state evolution" hasData={!!polarParamsData?.dataset?.length} deferUntilVisible placeholderMinHeight="40rem">
                         <ErrorBoundary>
                           {polarParamsData?.dataset?.length ? (() => {
                             const integrated = polarParamsData.dataset[0];
@@ -1509,11 +1744,14 @@ const App: React.FC = () => {
                                   isDark={polarParamsPlotThemeIsDark}
                                   startPhase={startPhaseAitoff}
                                   endPhase={endPhaseAitoff}
-                                />
-                                <RadiusOfCurvaturePlot
-                                  phaseAxis={phaseAxis}
-                                  radius={integrated.radius_of_curvature ?? []}
-                                  isDark={polarParamsPlotThemeIsDark}
+                                  radiusOfCurvature={integrated.radius_of_curvature ?? []}
+                                  stokesProfiles={{
+                                    I: profilesData?.I,
+                                    Q: profilesData?.Q,
+                                    U: profilesData?.U,
+                                    V: profilesData?.V,
+                                  }}
+                                  filenamePrefix={observationFilenameBase}
                                 />
                               </>
                             );
@@ -1521,38 +1759,63 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
-              {/* Selected subpulse Poincare and polarisation parameters */}
+              {/* Selected single pulse polarisation state evolution */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Selected subpulse Poincare sphere and polarisation parameters</h2>
-                      <PlotStatusBadge state={subpulseParamsState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
+                    <Collapsible open={openSections.selectedPulse} onOpenChange={open => setOpenSections(current => ({ ...current, selectedPulse: open }))}>
+                    {renderSectionHeading("selectedPulse", "Polarisation State Evolution: Selected Single Pulse Profile", subpulseParamsState)}
+                    {openSections.selectedPulse && (
+                    <CollapsibleContent>
+                    {topPulsePower.length > 0 && (
+                      <div className="top-pulse-list" aria-label="Top 10 pulses by power">
+                        <div className="top-pulse-list-title">Top 10 pulse indices by summed Stokes I power</div>
+                        <div className="top-pulse-list-grid">
+                          {topPulsePower.slice(0, 10).map((pulse, rank) => {
+                            const pulseIndex = Number(pulse.pulse_index);
+                            return (
+                              <button
+                                key={`${pulseIndex}-${rank}`}
+                                type="button"
+                                className={`top-pulse-chip ${selectedSubpulseIndex === pulseIndex ? "is-active" : ""}`}
+                                onClick={() => {
+                                  setSelectedSubpulseDraft(String(pulseIndex));
+                                  setSelectedSubpulseIndex(pulseIndex);
+                                  setSubpulsePolarParamsData(null);
+                                }}
+                              >
+                                <span>{rank + 1}. {pulseIndex}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase window: {startPhaseSubpulse.toFixed(3)} - {endPhaseSubpulse.toFixed(3)}</div>
-                    </div>
                     <div className="grid grid-cols-1 gap-2 items-end mt-2 sm:max-w-xs">
                       <div>
                         <Label className="form-label text-muted-foreground">Pulse index</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={totalSubpulses > 0 ? Math.max(0, totalSubpulses - 1) : undefined}
-                          step={1}
-                          value={selectedSubpulseIndex}
-                          onChange={e => {
-                            const nextIndex = Math.max(0, Math.floor(Number(e.target.value) || 0));
-                            setSelectedSubpulseIndex(nextIndex);
-                            setSubpulsePolarParamsData(null);
-                          }}
-                        />
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={0}
+                            max={totalSubpulses > 0 ? Math.max(0, totalSubpulses - 1) : undefined}
+                            step={1}
+                            value={selectedSubpulseDraft}
+                            onChange={e => setSelectedSubpulseDraft(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") loadSelectedSubpulseDraft();
+                            }}
+                          />
+                          <Button type="button" variant="outline" size="sm" onClick={loadSelectedSubpulseDraft}>
+                            Load
+                          </Button>
+                          <span className="whitespace-nowrap text-sm font-semibold text-foreground">
+                            {selectedSubpulseIndex}/{totalSubpulses > 0 ? totalSubpulses.toLocaleString() : "..."}
+                          </span>
+                        </div>
                       </div>
                     </div>
                     {subpulseRangeInvalid && (
@@ -1566,42 +1829,124 @@ const App: React.FC = () => {
                             const phaseAxis = subpulsePolarParamsData.phase_axis ?? [];
                             if (!selectedSubpulse || !phaseAxis.length) return null;
                             return (
-                              <SubpulsePolarisationView
+                              <PolarisationDualView
                                 phaseAxis={phaseAxis}
-                                data={selectedSubpulse}
-                                selectedPulseIndex={selectedSubpulseIndex}
+                                data={{
+                                  PA: selectedSubpulse.PA ?? [],
+                                  EA: selectedSubpulse.EA ?? [],
+                                  x: selectedSubpulse.x ?? [],
+                                  y: selectedSubpulse.y ?? [],
+                                  z: selectedSubpulse.z ?? [],
+                                  p_frac: selectedSubpulse.p_frac ?? [],
+                                  l_frac: selectedSubpulse.l_frac ?? [],
+                                  v_frac: selectedSubpulse.v_frac ?? [],
+                                  absv_frac: selectedSubpulse.absv_frac ?? [],
+                                }}
                                 isDark={subpulsePlotThemeIsDark}
+                                startPhase={startPhaseSubpulse}
+                                endPhase={endPhaseSubpulse}
+                                radiusOfCurvature={selectedSubpulse.radius_of_curvature ?? []}
+                                stokesProfiles={{
+                                  I: { x: phaseAxis, y: selectedSubpulse.I ?? [] },
+                                  Q: { x: phaseAxis, y: selectedSubpulse.Q ?? [] },
+                                  U: { x: phaseAxis, y: selectedSubpulse.U ?? [] },
+                                  V: { x: phaseAxis, y: selectedSubpulse.V ?? [] },
+                                }}
+                                filenamePrefix={selectedPulseFilenameBase}
                               />
                             );
                           })() : null}
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
+              </section>
+
+              {/* Fixed-pulse-longitude polarisation state evolution */}
+              <section className="scientific-section section-plain">
+                    <Collapsible open={openSections.allPulsesPhase} onOpenChange={open => setOpenSections(current => ({ ...current, allPulsesPhase: open }))}>
+                    {renderSectionHeading("allPulsesPhase", "Polarisation State Evolution: All Pulses at Selected Phase", aitoffState)}
+                    {openSections.allPulsesPhase && (
+                    <CollapsibleContent>
+                    <div className="grid grid-cols-1 gap-2 items-end mt-2 sm:max-w-xs">
+                      <div>
+                        <Label className="form-label text-muted-foreground">Pulse Phase</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={startPhaseAitoff}
+                            max={endPhaseAitoff}
+                            step={0.001}
+                            value={aitoffPhaseDraft}
+                            onChange={e => setAitoffPhaseDraft(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") loadAitoffPhaseDraft();
+                            }}
+                          />
+                          <Button type="button" variant="outline" size="sm" onClick={loadAitoffPhaseDraft}>
+                            Load
+                          </Button>
+                          <span className="whitespace-nowrap text-sm font-semibold text-foreground">
+                            {startPhaseAitoff.toFixed(3)}-{endPhaseAitoff.toFixed(3)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 w-full">
+                      <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!fixedPhaseAitoffData} deferUntilVisible placeholderMinHeight="32rem">
+                        <ErrorBoundary>
+                          {fixedPhaseAitoffData && (
+                            <PoincareAitoffView data={fixedPhaseAitoffData} phaseValue={aitoffPhase} isDark={aitoffPlotThemeIsDark} filenamePrefix={selectedPhaseFilenameBase} />
+                          )}
+                        </ErrorBoundary>
+                      </PlotResultSlot>
+                    </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
+              </section>
+
+              {/* RVM fitting */}
+              <section className="scientific-section section-plain">
+                    <Collapsible open={openSections.rvmFit} onOpenChange={open => setOpenSections(current => ({ ...current, rvmFit: open }))}>
+                    {renderSectionHeading("rvmFit", "RVM Fitting and Orthogonal Polarisation Modes", rvmFitState)}
+                    {openSections.rvmFit && (
+                    <CollapsibleContent>
+                    <div className="mt-4 w-full">
+                      <PlotResultSlot state={rvmFitState} label="RVM fitting" hasData={!!rvmFitData} deferUntilVisible placeholderMinHeight="38rem">
+                        <ErrorBoundary>
+                          {rvmFitData && (
+                            <RvmFittingView
+                              data={rvmFitData}
+                              isDark={rvmFitPlotThemeIsDark}
+                              filenamePrefix={observationFilenameBase}
+                              onPulseWindows={availableOnPulseWindows}
+                            />
+                          )}
+                        </ErrorBoundary>
+                      </PlotResultSlot>
+                    </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
               {/* Polarisation histograms (2D) */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Phase-resolved polarisation histograms</h2>
-                      <PlotStatusBadge state={histogramsState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase window: {startPhasePolHist.toFixed(3)} - {endPhasePolHist.toFixed(3)}</div>
-                    </div>
+                    <Collapsible open={openSections.hist2d} onOpenChange={open => setOpenSections(current => ({ ...current, hist2d: open }))}>
+                    {renderSectionHeading("hist2d", "2D Histograms: Polarisation Parameters Vs Phase", histogramsState)}
+                    {openSections.hist2d && (
+                    <CollapsibleContent>
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={histogramsState} label="Phase-resolved polarisation histograms" hasData={!!polHistogramData} deferUntilVisible placeholderMinHeight="34rem">
+                      <PlotResultSlot state={histogramsState} label="2D histograms" hasData={!!polHistogramData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
                           {polHistogramData && (
                             <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
                               {POLARISATION_QUANTITIES.map(q => (
                                 <div key={q}>
-                                  <SinglePolarisationHistogram data={polHistogramData[q]} isDark={histogramsPlotThemeIsDark} />
+                                  <SinglePolarisationHistogram data={polHistogramData[q]} isDark={histogramsPlotThemeIsDark} filenamePrefix={observationFilenameBase} />
                                 </div>
                               ))}
                             </div>
@@ -1609,49 +1954,37 @@ const App: React.FC = () => {
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
-              {/* Polarisation stacks */}
+              {/* Pulse stacks */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Polarisation stacks</h2>
-                      <PlotStatusBadge state={stacksState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase window: {startPhasePolStacks.toFixed(3)} - {endPhasePolStacks.toFixed(3)}</div>
-                    </div>
+                    <Collapsible open={openSections.pulseStacks} onOpenChange={open => setOpenSections(current => ({ ...current, pulseStacks: open }))}>
+                    {renderSectionHeading("pulseStacks", "Pulse Stacks: Stokes and Polarisation Parameters", stacksState)}
+                    {openSections.pulseStacks && (
+                    <CollapsibleContent>
                     <div className="mt-4 w-full">
-                      <PlotResultSlot state={stacksState} label="Polarisation stacks" hasData={!!polStacksData} deferUntilVisible placeholderMinHeight="34rem">
+                      <PlotResultSlot state={stacksState} label="Pulse stacks" hasData={!!combinedPulseStacksData} deferUntilVisible placeholderMinHeight="34rem">
                         <ErrorBoundary>
-                          {polStacksData && (
-                            <PolarisationStacks data={polStacksData} isDark={stacksPlotThemeIsDark} />
+                          {combinedPulseStacksData && (
+                            <PolarisationStacks data={combinedPulseStacksData} isDark={stacksPlotThemeIsDark} filenamePrefix={observationFilenameBase} />
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
               {/* Phase-slice histograms section */}
               <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Phase-slice histograms</h2>
-                      <PlotStatusBadge state={phaseSlicesState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Phase slices: {leftPhaseHist.toFixed(3)} - {midPhaseHist.toFixed(3)} - {rightPhaseHist.toFixed(3)}</div>
-                    </div>
+                    <Collapsible open={openSections.phaseSlices} onOpenChange={open => setOpenSections(current => ({ ...current, phaseSlices: open }))}>
+                    {renderSectionHeading("phaseSlices", "1D Histograms: Polarisation Parameters at Selected Phase", phaseSlicesState)}
+                    {openSections.phaseSlices && (
+                    <CollapsibleContent>
                     <div className="mt-4 w-full">
                       <PlotResultSlot state={phaseSlicesState} label="Phase-slice histograms" hasData={!!phaseHistogramData} deferUntilVisible placeholderMinHeight="30rem">
                         <ErrorBoundary>
@@ -1660,45 +1993,29 @@ const App: React.FC = () => {
                               data={phaseHistogramData}
                               isDark={phaseSlicesPlotThemeIsDark}
                               phaseWindow={{ left: leftPhaseHist, mid: midPhaseHist, right: rightPhaseHist }}
+                              filenamePrefix={phaseSliceFilenameBase}
                             />
                           )}
                         </ErrorBoundary>
                       </PlotResultSlot>
                     </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
               </section>
 
-              {/* Poincare Aitoff section */}
-              <section className="scientific-section section-plain">
-                    <div className="section-heading-row">
-                      <h2 className="section-title">Fixed-phase Poincare sphere</h2>
-                      <PlotStatusBadge state={aitoffState} />
-                    </div>
-                    {obsMetadata && (
-                      <div className="section-metadata">
-                        <div>Obs ID: {obsMetadata.obsId}</div>
-                        <div>Frequency: {obsMetadata.freq} MHz | UTC Start: {obsMetadata.utcStart}</div>
-                      </div>
-                    )}
-                    <div className="section-metadata mt-2">
-                      <div>Fixed phase: {aitoffPhase.toFixed(3)}</div>
-                      <div>On-pulse window: {startPhaseAitoff.toFixed(3)} - {endPhaseAitoff.toFixed(3)}</div>
-                    </div>
-                    <div className="mt-4 w-full">
-                      <PlotResultSlot state={aitoffState} label="Fixed-phase Poincare sphere" hasData={!!poincareAitoffData} deferUntilVisible placeholderMinHeight="32rem">
-                        <ErrorBoundary>
-                          {poincareAitoffData && (
-                            <PoincareAitoffView data={poincareAitoffData} phaseValue={aitoffPhase} isDark={aitoffPlotThemeIsDark} />
-                          )}
-                        </ErrorBoundary>
-                      </PlotResultSlot>
-                    </div>
-              </section>
             </div>
           </>
         )}
+        </section>
+        </div>
       </main>
     </div>
   );
 };
+
+function ReadMePage() {
+  return <section className="info-page" aria-label="Read Me" />;
+}
 
 export default App;

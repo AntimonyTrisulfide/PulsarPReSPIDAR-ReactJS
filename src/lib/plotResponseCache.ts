@@ -2,7 +2,7 @@ const DB_NAME = "pulsar-prespidar-cache";
 const STORE_NAME = "session";
 const PLOT_RESPONSE_PREFIX = "plot-response:";
 const PLOT_RESPONSE_INDEX_KEY = "plot-response-index";
-const PLOT_RESPONSE_CACHE_VERSION = 1;
+const PLOT_RESPONSE_CACHE_VERSION = 3;
 const MAX_PERSISTED_PLOT_RESPONSES = 48;
 
 type PlotResponseCacheRecord = {

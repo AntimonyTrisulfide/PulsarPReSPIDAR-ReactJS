@@ -6,6 +6,7 @@ import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
 import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
 import { PLOT_AXIS_TITLE_SIZE, PLOT_TICK_FONT_SIZE, plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 import { RED_TO_RED_COLOR_SCALE, redToRedPhaseColor } from "@/shared/plot/phaseColorScale";
+import CustomParameterPlot, { type CustomAxisOption } from "./CustomParameterPlot";
 
 type NumericSeries = Array<number | null>;
 
@@ -212,6 +213,20 @@ export default function SubpulsePolarisationView({ phaseAxis, data, selectedPuls
     [data, phaseAxis, selectedPlotMode, selectedSingleQuantityOption.color, selectedSingleQuantityOption.label, visibleCombinedSeries],
   );
 
+  const customAxisOptions = useMemo<CustomAxisOption[]>(() => [
+    { key: "phase", label: "Phase", values: phaseAxis },
+    { key: "I", label: "I", values: data.I ?? [] },
+    { key: "PA", label: "PA (deg)", values: data.PA ?? [] },
+    { key: "EA", label: "EA (deg)", values: data.EA ?? [] },
+    { key: "dPA", label: "dPA", values: data.dPA ?? [] },
+    { key: "p_frac", label: "P/I", values: data.p_frac ?? [] },
+    { key: "l_frac", label: "L/I", values: data.l_frac ?? [] },
+    { key: "v_frac", label: "V/I", values: data.v_frac ?? [] },
+    { key: "Q", label: "Q", values: data.x ?? [] },
+    { key: "U", label: "U", values: data.y ?? [] },
+    { key: "V", label: "V", values: data.z ?? [] },
+  ], [data, phaseAxis]);
+
   const dispatchResize = useCallback((force = false) => {
     const now = performance.now();
     if (!force && now - lastResizeTs.current < 16) return;
@@ -352,6 +367,13 @@ export default function SubpulsePolarisationView({ phaseAxis, data, selectedPuls
             ))}
           </div>
         )}
+        <CustomParameterPlot
+          axisOptions={customAxisOptions}
+          defaultXKey="phase"
+          defaultYKey="p_frac"
+          isDark={isDark}
+          filenamePrefix={`subpulse-${selectedPulseIndex}`}
+        />
       </div>
     </div>
   );

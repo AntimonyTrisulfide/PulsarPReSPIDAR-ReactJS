@@ -18,13 +18,20 @@ export type PhaseSliceHistogramData = {
       counts: number[];
       x_limits?: [number, number] | null;
       stats: {
-        min: number;
-        max: number;
-        mean: number;
-        std: number;
+        min: number | null;
+        max: number | null;
+        mean: number | null;
+        std: number | null;
         num_pulses: number;
+        finite_values?: number;
+        valid_values?: number;
+        masked_fraction?: number | null;
+        outside_display_range?: number;
+        fraction_outside_display_range?: number | null;
       };
     }>;
+    warnings?: string[];
+    metadata?: Record<string, unknown>;
   }[];
 };
 
@@ -32,11 +39,12 @@ type PhaseSliceHistogramsProps = {
   data: PhaseSliceHistogramData | null;
   isDark?: boolean;
   phaseWindow?: { left: number; mid: number; right: number };
+  filenamePrefix?: string;
 };
 
 const palette = ["#2563eb", "#f97316", "#22c55e", "#e11d48", "#14b8a6", "#a855f7"];
 
-export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: PhaseSliceHistogramsProps) {
+export default function PhaseSliceHistograms({ data, isDark, phaseWindow, filenamePrefix = "observation" }: PhaseSliceHistogramsProps) {
   if (!data) return null;
 
   const [fullscreenKey, setFullscreenKey] = useState<string | null>(null);
@@ -53,11 +61,12 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
     return data.quantities.map((quantity, qIndex) => {
       const cols = quantity.phase_slices.length || 1;
       const tracesAcc: any[] = [];
+      const annotationsAcc: any[] = [];
       const layoutAcc: any = {
         grid: { rows: 1, columns: cols, pattern: "independent" },
         showlegend: false,
         height: 230,
-        margin: { l: 72, r: 36, t: 34, b: 58 },
+        margin: { l: 72, r: 36, t: 54, b: 58 },
         paper_bgcolor: paperBg,
         plot_bgcolor: plotBg,
         font: plotFont(axisColor),
@@ -123,8 +132,24 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
           automargin: true,
         };
 
+        const caption = getSliceCaption(quantity, slice);
+        if (caption) {
+          annotationsAcc.push({
+            xref: `${xaxis} domain`,
+            yref: "paper",
+            x: 0.5,
+            y: 1.13,
+            xanchor: "center",
+            yanchor: "bottom",
+            showarrow: false,
+            text: caption,
+            align: "center",
+            font: { color: axisColor, size: 12 },
+          });
+        }
       });
 
+      layoutAcc.annotations = annotationsAcc;
       return { key: `${quantity.name}-${qIndex}-${themeKey}`, quantity, traces: tracesAcc, layout: lockCartesianInteractions(layoutAcc) };
     });
   }, [data, axisColor, gridColor, paperBg, plotBg, template, themeKey]);
@@ -140,7 +165,7 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
         >
           <div className="plot-toolbar mb-1">
             <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
-            <PlotExportButtons filename={`phase-slice-${item.quantity.name}`} />
+            <PlotExportButtons filename={`${filenamePrefix}-phase-slice-${item.quantity.name}`} />
             <div className="plot-panel-title text-foreground/90">{item.quantity.name}</div>
           </div>
           {phaseWindow && (
@@ -163,7 +188,7 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
         <FullscreenOverlay onClose={() => setFullscreenKey(null)} contentClassName="p-4 w-[95vw] max-w-7xl h-[90vh]" title="Phase slice fullscreen">
           <div className="plot-export-scope h-full w-full pt-8">
             <div className="plot-toolbar mb-2">
-              <PlotExportButtons filename={`phase-slice-${fullscreenItem.quantity.name}-fullscreen`} />
+              <PlotExportButtons filename={`${filenamePrefix}-phase-slice-${fullscreenItem.quantity.name}-fullscreen`} />
             </div>
             <Plot
               data={fullscreenItem.traces}
@@ -178,4 +203,23 @@ export default function PhaseSliceHistograms({ data, isDark, phaseWindow }: Phas
       )}
     </div>
   );
+}
+
+function getSliceCaption(
+  quantity: PhaseSliceHistogramData["quantities"][number],
+  slice: PhaseSliceHistogramData["quantities"][number]["phase_slices"][number],
+) {
+  const sigmaThreshold = Number(quantity.metadata?.sigma_threshold);
+  const sigmaText = Number.isFinite(sigmaThreshold) ? sigmaThreshold.toFixed(2) : "3.00";
+  const snrLabel = getSnrLabel(quantity.name);
+  const finite = Number(slice.stats.finite_values);
+  const valid = Number(slice.stats.valid_values);
+  if (!Number.isFinite(finite) || finite <= 0 || !Number.isFinite(valid)) return "";
+  return `${valid}/${finite} samples pass ${snrLabel} > ${sigmaText}`;
+}
+
+function getSnrLabel(quantityName: string) {
+  if (quantityName.startsWith("PA")) return "L S/N";
+  if (quantityName.startsWith("EA")) return "P S/N";
+  return "I S/N";
 }

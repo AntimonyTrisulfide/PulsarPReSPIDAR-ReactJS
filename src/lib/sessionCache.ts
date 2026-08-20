@@ -7,6 +7,8 @@ export type PersistedPlotSettings = {
   username: string;
   obsMetadata: unknown;
   datasetOnPulse: { start: number; end: number };
+  availableOnPulseWindows?: Array<{ start: number; end: number; mid: number }>;
+  activeOnPulseWindowIndex?: number;
   startPhaseAitoff: number;
   endPhaseAitoff: number;
   startPhaseSubpulse: number;

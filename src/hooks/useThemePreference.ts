@@ -25,7 +25,7 @@ export function useThemePreference() {
         root.classList.add("theme-switching");
         cleanupTimer = window.setTimeout(() => {
           root.classList.remove("theme-switching");
-        }, 360);
+        }, 140);
       }
       root.classList.toggle("dark", isDark);
       localStorage.setItem("theme", isDark ? "dark" : "light");

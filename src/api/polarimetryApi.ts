@@ -3,7 +3,7 @@ import { readPlotResponseCache, writePlotResponseCache } from "@/lib/plotRespons
 export const DEFAULT_MEERTIME_NPZ_URL =
   "https://psrweb.jb.man.ac.uk/meertime/singlepulse/J0835-4510/2020-12-26-21:39:16/1284/plots/2020-12-26-21:39:16.npz";
 
-export const POLARISATION_QUANTITIES = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA", "I", "dPA"] as const;
+export const POLARISATION_QUANTITIES = ["PA", "EA", "P/I", "L/I", "V/I", "|V/I|"] as const;
 export const POLARISATION_STACK_QUANTITIES = ["PA", "EA", "P/I", "L/I", "|V/I|", "V/I"] as const;
 export const PHASE_SLICE_QUANTITIES = ["P/I", "L/I", "|V/I|", "V/I", "PA", "EA"] as const;
 
@@ -16,8 +16,10 @@ export const POLARIMETRY_ENDPOINTS = {
   polarisationStack: "/polarisation_stack",
   polarisationStacks: "/polarisation_stacks",
   polarisationParams: "/polarisation_params",
+  rvmFit: "/rvm_fit",
   phaseSliceHistogram: "/phase_slice_histogram",
   phaseSliceHistograms: "/phase_slice_histograms",
+  totalIntensityEvolution: "/total_intensity_evolution",
 } as const;
 
 const CONFIGURED_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -44,6 +46,8 @@ export type PhaseRange = {
   end: number;
 };
 
+export type OnPulseWindow = PhaseRange & { mid: number };
+
 export type ObservationMetadata = {
   obsId: string;
   freq: string;
@@ -52,7 +56,8 @@ export type ObservationMetadata = {
 
 export type RemoteFileLoadResult = {
   blob: Blob;
-  onPulse: PhaseRange & { mid: number };
+  onPulse: OnPulseWindow;
+  onPulseWindows: OnPulseWindow[];
   metadata: ObservationMetadata | null;
 };
 
@@ -100,6 +105,48 @@ function buildPlotResponseCacheKey(path: string, params: URLSearchParams) {
   return `${path}?${new URLSearchParams(sortedParams).toString()}`;
 }
 
+async function readResponseError(response: Response, fallback: string) {
+  let body = "";
+  try {
+    body = await response.text();
+  } catch {
+    return fallback;
+  }
+
+  if (!body) return fallback;
+
+  try {
+    const parsed = JSON.parse(body);
+    const detail = parsed?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map(item => {
+          const location = Array.isArray(item?.loc) ? item.loc.join(".") : "";
+          const message = item?.msg ?? JSON.stringify(item);
+          return location ? `${location}: ${message}` : String(message);
+        })
+        .join("; ");
+    }
+    if (parsed?.message) return String(parsed.message);
+  } catch {
+    // Non-JSON upstream responses are still useful, especially auth pages.
+  }
+
+  return body.slice(0, 500);
+}
+
+function isLikelyNumpyPayload(bytes: Uint8Array) {
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const isNpy = bytes[0] === 0x93
+    && bytes[1] === 0x4e
+    && bytes[2] === 0x55
+    && bytes[3] === 0x4d
+    && bytes[4] === 0x50
+    && bytes[5] === 0x59;
+  return isZip || isNpy;
+}
+
 async function postDatasetJson<T>(path: string, source: DatasetSource, params: URLSearchParams): Promise<T> {
   const formData = new FormData();
   let cacheKey: string | null = null;
@@ -128,7 +175,8 @@ async function postDatasetJson<T>(path: string, source: DatasetSource, params: U
       retryParams.delete("data_key");
       return postDatasetJson(path, source.fallbackFile, retryParams);
     }
-    throw new Error(`Request failed: ${path} (${response.status}) via ${requestUrl}`);
+    const detail = await readResponseError(response, `Request failed: ${path}`);
+    throw new Error(`Request failed: ${path} (${response.status}): ${detail}`);
   }
 
   const payload = await response.json() as T;
@@ -155,7 +203,8 @@ export async function prepareDataset(file: File | Blob, onPulse: PhaseRange): Pr
   });
 
   if (!response.ok) {
-    throw new Error(`Dataset preparation failed (${response.status}) via ${requestUrl}`);
+    const detail = await readResponseError(response, "Dataset preparation failed.");
+    throw new Error(`Dataset preparation failed (${response.status}): ${detail}`);
   }
 
   return response.json() as Promise<PreparedDatasetResult>;
@@ -169,6 +218,7 @@ export async function fetchPoincareAitoffData(source: DatasetSource, phaseValue:
       phase_value: String(phaseValue),
       on_pulse_start: String(onPulse.start),
       on_pulse_end: String(onPulse.end),
+      payload_version: "2",
     }),
   );
 }
@@ -195,6 +245,21 @@ export async function fetchHeatmapsData(source: DatasetSource, phaseRange: Phase
   );
 }
 
+export async function fetchTotalIntensityEvolution(source: DatasetSource, phaseRange: PhaseRange, onPulse: PhaseRange) {
+  return postDatasetJson(
+    POLARIMETRY_ENDPOINTS.totalIntensityEvolution,
+    source,
+    new URLSearchParams({
+      start_phase: String(phaseRange.start),
+      end_phase: String(phaseRange.end),
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
+      normalization: "energy_mean_on",
+      payload_version: "20",
+    }),
+  );
+}
+
 export async function fetchPolarisationHistogram(source: DatasetSource, quantity: string, phaseRange: PhaseRange, onPulse: PhaseRange) {
   return postDatasetJson(
     POLARIMETRY_ENDPOINTS.polarisationHistogram,
@@ -205,6 +270,8 @@ export async function fetchPolarisationHistogram(source: DatasetSource, quantity
       on_pulse_start: String(onPulse.start),
       on_pulse_end: String(onPulse.end),
       quantity,
+      sigma_threshold: "3",
+      payload_version: "2",
     }),
   );
 }
@@ -246,6 +313,8 @@ export async function fetchPolarisationStack(source: DatasetSource, quantity: st
       on_pulse_start: String(onPulse.start),
       on_pulse_end: String(onPulse.end),
       quantity,
+      sigma_threshold: "3",
+      payload_version: "3",
     }),
   );
 }
@@ -263,7 +332,7 @@ export async function fetchPolarisationStacks(
     on_pulse?: PhaseRange;
     phase_axis?: number[];
     pulse_number?: number[];
-    quantities: Array<{ key?: string; name: string; data: number[][]; vmin?: number; vmax?: number }>;
+    quantities: Array<{ key?: string; name: string; data: Array<Array<number | null>>; vmin?: number; vmax?: number }>;
   } = {
     quantities: [],
   };
@@ -310,6 +379,8 @@ export async function fetchPolarisationParams(
     on_pulse_start: String(onPulse.start),
     on_pulse_end: String(onPulse.end),
     max_pulses: String(maxPulses),
+    sigma_threshold: "3",
+    payload_version: "2",
   });
 
   if (pulseIndex !== undefined) {
@@ -320,6 +391,23 @@ export async function fetchPolarisationParams(
     POLARIMETRY_ENDPOINTS.polarisationParams,
     source,
     params,
+  );
+}
+
+export async function fetchRvmFit(source: DatasetSource, phaseRange: PhaseRange, onPulse: PhaseRange) {
+  return postDatasetJson(
+    POLARIMETRY_ENDPOINTS.rvmFit,
+    source,
+    new URLSearchParams({
+      start_phase: String(phaseRange.start),
+      end_phase: String(phaseRange.end),
+      on_pulse_start: String(onPulse.start),
+      on_pulse_end: String(onPulse.end),
+      sigma_threshold: "3",
+      phase_bins: "96",
+      pa_bins: "120",
+      payload_version: "1",
+    }),
   );
 }
 
@@ -339,6 +427,8 @@ export async function fetchPhaseSliceHistogram(
       on_pulse_start: String(onPulse.start),
       on_pulse_end: String(onPulse.end),
       quantity,
+      sigma_threshold: "3",
+      payload_version: "2",
     }),
   );
 }
@@ -363,13 +453,20 @@ export async function fetchPhaseSliceHistograms(
         counts: number[];
         x_limits?: [number, number] | null;
         stats: {
-          min: number;
-          max: number;
-          mean: number;
-          std: number;
+          min: number | null;
+          max: number | null;
+          mean: number | null;
+          std: number | null;
           num_pulses: number;
+          finite_values?: number;
+          valid_values?: number;
+          masked_fraction?: number | null;
+          outside_display_range?: number;
+          fraction_outside_display_range?: number | null;
         };
       }>;
+      warnings?: string[];
+      metadata?: Record<string, unknown>;
     }>;
   } = {
     quantities: [],
@@ -474,7 +571,7 @@ function getRemoteRequestInit(fetchUrl: string, credentials?: RemoteAuthCredenti
 export async function loadRemoteNpz(url: string, credentials?: RemoteAuthCredentials): Promise<RemoteFileLoadResult> {
   const fetchUrl = resolveRemoteFetchUrl(url);
   const requestInit = getRemoteRequestInit(fetchUrl, credentials);
-  const onPulse = { start: 0, end: 1, mid: 0.5 };
+  let onPulseWindows: OnPulseWindow[] = [{ start: 0, end: 1, mid: 0.5 }];
   let pipelineJson: Record<string, any> | null = null;
 
   const pipelineInfoUrl = getPipelineInfoUrl(url);
@@ -484,15 +581,18 @@ export async function loadRemoteNpz(url: string, credentials?: RemoteAuthCredent
       const pipelineRes = await fetch(pipelineFetchUrl, getRemoteRequestInit(pipelineFetchUrl, credentials));
       if (pipelineRes.ok) {
         pipelineJson = await pipelineRes.json();
-        const candidate = pipelineJson?.windows?.on?.[0];
-        if (Array.isArray(candidate) && candidate.length >= 2) {
-          const candidateStart = Number(candidate[0]);
-          const candidateEnd = Number(candidate[1]);
-          if (Number.isFinite(candidateStart) && Number.isFinite(candidateEnd)) {
-            onPulse.start = candidateStart;
-            onPulse.end = candidateEnd;
-            onPulse.mid = (candidateStart + candidateEnd) / 2;
-          }
+        const candidates = Array.isArray(pipelineJson?.windows?.on) ? pipelineJson.windows.on : [];
+        const parsedWindows = candidates
+          .map((candidate: unknown) => {
+            if (!Array.isArray(candidate) || candidate.length < 2) return null;
+            const start = Number(candidate[0]);
+            const end = Number(candidate[1]);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+            return { start, end, mid: (start + end) / 2 };
+          })
+          .filter((windowValue: OnPulseWindow | null): windowValue is OnPulseWindow => windowValue !== null);
+        if (parsedWindows.length) {
+          onPulseWindows = parsedWindows;
         }
       }
     } catch (error) {
@@ -502,12 +602,21 @@ export async function loadRemoteNpz(url: string, credentials?: RemoteAuthCredent
 
   const response = await fetch(fetchUrl, requestInit);
   if (!response.ok) {
-    throw new Error(`Failed to fetch file (${response.status}) via ${fetchUrl}`);
+    const detail = await readResponseError(response, "Failed to fetch file.");
+    throw new Error(`Failed to fetch file (${response.status}): ${detail}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer.slice(0, 8));
+  if (!isLikelyNumpyPayload(bytes)) {
+    const contentType = response.headers.get("content-type") ?? "unknown content type";
+    throw new Error(`Fetched URL did not return a numpy .npz/.npy file (${contentType}). Check the URL and credentials.`);
   }
 
   return {
-    blob: await response.blob(),
-    onPulse,
+    blob: new Blob([arrayBuffer], { type: response.headers.get("content-type") ?? "application/octet-stream" }),
+    onPulse: onPulseWindows[0],
+    onPulseWindows,
     metadata: pipelineJson ? metadataFromPipeline(url, pipelineJson) : null,
   };
 }

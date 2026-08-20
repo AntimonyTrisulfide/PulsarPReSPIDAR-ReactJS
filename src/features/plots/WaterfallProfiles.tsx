@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { MAGMA_COLOR_SCALE } from "@/shared/plot/colorScales";
 import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
 import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
@@ -22,6 +23,8 @@ interface WaterfallProfilesProps {
   startPhase?: number;
   endPhase?: number;
   isDark?: boolean;
+  showHeatmaps?: boolean;
+  showProfiles?: boolean;
 }
 
 type StokesItem = {
@@ -63,7 +66,15 @@ function buildAxisTheme(axisColor: string, gridColor: string) {
   };
 }
 
-export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endPhase = 1, isDark }: WaterfallProfilesProps) {
+export default function WaterfallProfiles({
+  data,
+  heatmaps,
+  startPhase = 0,
+  endPhase = 1,
+  isDark,
+  showHeatmaps = true,
+  showProfiles = true,
+}: WaterfallProfilesProps) {
   if (!data) return null;
 
   const [fullscreenKey, setFullscreenKey] = useState<string | null>(null);
@@ -143,13 +154,13 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
           <div key={item.key} className="plot-export-scope min-w-0">
             <div className="plot-toolbar mb-2">
               <FullscreenIconButton onClick={() => setFullscreenKey(item.key)} title="Fullscreen" />
-              <PlotExportButtons filename={`stokes-${item.key}-heatmap`} />
+              <PlotExportButtons filename={`stokes-${item.key}-${showHeatmaps ? "heatmap" : "profile"}`} />
               <div className="plot-panel-title text-foreground/90">Stokes {item.key}</div>
             </div>
 
             <div className="space-y-5">
+              {showHeatmaps && (
               <div className="aspect-square w-full">
-                <div className="plot-subplot-title mb-2 text-center text-foreground">Heatmap</div>
                 <Plot
                   data={
                     item.heatmap
@@ -159,11 +170,11 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                             y: item.heatmap.pulse_number,
                             z: item.heatmap.heatmap_data,
                             type: "heatmap" as const,
-                            colorscale: "Viridis",
+                            colorscale: MAGMA_COLOR_SCALE,
                             zmin: item.heatmap.vmin,
                             zmax: item.heatmap.vmax,
                             showscale: false,
-                            hovertemplate: `Phase %{x:.4f}<br>Pulse %{y}<br>Value %{z:.3f}<extra>${item.key} heatmap</extra>`,
+                            hovertemplate: `Phase %{x:.4f}<br>Pulse %{y}<br>Value %{z:.3f}<extra>Stokes ${item.key}</extra>`,
                           },
                         ]
                       : []
@@ -171,12 +182,13 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                   layout={heatmapLayout()}
                   config={paperPlotConfig(`stokes-${item.key}-heatmap`)}
                   useResizeHandler
-                  style={{ width: "100%", height: "calc(100% - 2rem)" }}
+                  style={{ width: "100%", height: "100%" }}
                 />
               </div>
+              )}
 
-              <div className="aspect-square w-full border-t border-border pt-4">
-                <div className="plot-subplot-title mb-2 text-center text-foreground">Profile</div>
+              {showProfiles && (
+              <div className="aspect-square w-full">
                 <Plot
                   data={
                     item.profile
@@ -187,7 +199,7 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                             type: "scatter" as const,
                             mode: "lines" as const,
                             line: { color: item.color, width: 3 },
-                            hovertemplate: `Phase %{x:.4f}<br>Value %{y:.3f}<extra>${item.key} profile</extra>`,
+                            hovertemplate: `Phase %{x:.4f}<br>Value %{y:.3f}<extra>Stokes ${item.key}</extra>`,
                           },
                         ]
                       : []
@@ -195,9 +207,10 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                   layout={profileLayout()}
                   config={paperPlotConfig(`stokes-${item.key}-profile`)}
                   useResizeHandler
-                  style={{ width: "100%", height: "calc(100% - 2rem)" }}
+                  style={{ width: "100%", height: "100%" }}
                 />
               </div>
+              )}
             </div>
           </div>
         ))}
@@ -209,7 +222,8 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
             <div className="plot-toolbar mb-3">
               <PlotExportButtons filename={`stokes-${fullscreenItem.key}-fullscreen`} />
             </div>
-            <div className="grid h-[calc(100%-3rem)] grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className={`grid h-[calc(100%-3rem)] grid-cols-1 gap-6 ${showHeatmaps && showProfiles ? "lg:grid-cols-2" : ""}`}>
+              {showHeatmaps && (
               <div className="plot-export-scope h-full">
                 <Plot
                   data={
@@ -220,11 +234,11 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                             y: fullscreenItem.heatmap.pulse_number,
                             z: fullscreenItem.heatmap.heatmap_data,
                             type: "heatmap" as const,
-                            colorscale: "Viridis",
+                            colorscale: MAGMA_COLOR_SCALE,
                             zmin: fullscreenItem.heatmap.vmin,
                             zmax: fullscreenItem.heatmap.vmax,
                             showscale: false,
-                            hovertemplate: `Phase %{x:.4f}<br>Pulse %{y}<br>Value %{z:.3f}<extra>${fullscreenItem.key} heatmap</extra>`,
+                            hovertemplate: `Phase %{x:.4f}<br>Pulse %{y}<br>Value %{z:.3f}<extra>Stokes ${fullscreenItem.key}</extra>`,
                           },
                         ]
                       : []
@@ -235,7 +249,9 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                   style={{ width: "100%", height: "100%" }}
                 />
               </div>
+              )}
 
+              {showProfiles && (
               <div className="plot-export-scope h-full">
                 <Plot
                   data={
@@ -247,7 +263,7 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                             type: "scatter" as const,
                             mode: "lines" as const,
                             line: { color: fullscreenItem.color, width: 3 },
-                            hovertemplate: `Phase %{x:.4f}<br>Value %{y:.3f}<extra>${fullscreenItem.key} profile</extra>`,
+                            hovertemplate: `Phase %{x:.4f}<br>Value %{y:.3f}<extra>Stokes ${fullscreenItem.key}</extra>`,
                           },
                         ]
                       : []
@@ -258,6 +274,7 @@ export default function WaterfallProfiles({ data, heatmaps, startPhase = 0, endP
                   style={{ width: "100%", height: "100%" }}
                 />
               </div>
+              )}
             </div>
           </div>
         </FullscreenOverlay>

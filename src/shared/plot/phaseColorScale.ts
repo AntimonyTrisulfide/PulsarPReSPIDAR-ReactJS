@@ -1,12 +1,6 @@
-export const RED_TO_RED_COLOR_SCALE = [
-  [0, "#ff0000"],
-  [1 / 6, "#ffff00"],
-  [2 / 6, "#00ff00"],
-  [3 / 6, "#00ffff"],
-  [4 / 6, "#0000ff"],
-  [5 / 6, "#ff00ff"],
-  [1, "#ff0000"],
-] as const;
+import { PERCEPTUAL_RAINBOW_COLOR_SCALE } from "./colorScales";
+
+export const RED_TO_RED_COLOR_SCALE = PERCEPTUAL_RAINBOW_COLOR_SCALE;
 
 export function redToRedPhaseColor(value: number) {
   const phase = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
@@ -17,6 +11,8 @@ export function redToRedPhaseColor(value: number) {
   const localT = endPosition === startPosition ? 0 : (phase - startPosition) / (endPosition - startPosition);
   return interpolateHexColor(startColor, endColor, localT);
 }
+
+export const perceptualRainbowPhaseColor = redToRedPhaseColor;
 
 function interpolateHexColor(start: string, end: string, t: number) {
   const startRgb = hexToRgb(start);

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import { FullscreenOverlay, FullscreenIconButton } from "@/components/FullscreenOverlay";
 import { PlotExportButtons } from "@/shared/plot/PlotExportButtons";
+import { MAGMA_COLOR_SCALE } from "@/shared/plot/colorScales";
 import { lockCartesianInteractions, paperPlotConfig } from "@/shared/plot/plotlyConfig";
 import { plotAxisText, plotFont } from "@/shared/plot/plotTypography";
 
@@ -108,7 +109,7 @@ export default function PolarisationHistograms({ data, isDark }: Props) {
         x: xCenters,
         y: yCenters,
         z: safeCounts,
-        colorscale: "Log",
+        colorscale: MAGMA_COLOR_SCALE,
         colorbar: row === 0 ? { title: "Count" } : undefined,
         zmin,
         zmax,
