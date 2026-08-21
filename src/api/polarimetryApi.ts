@@ -22,16 +22,31 @@ export const POLARIMETRY_ENDPOINTS = {
   totalIntensityEvolution: "/total_intensity_evolution",
 } as const;
 
-const CONFIGURED_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim();
-const NORMALIZED_CONFIGURED_API_BASE_URL = CONFIGURED_API_BASE_URL?.replace(/\/$/, "");
 const RENDER_API_BASE_URL = "https://pulsarprespidar-fastapi-phar.onrender.com";
 const DEFAULT_API_BASE_URL = import.meta.env.PROD ? "/backend" : "http://localhost:8000";
+const ABSOLUTE_URL_PATTERN = /^[a-z][a-z\d+\-.]*:\/\//i;
+const LOCAL_HOST_PATTERN = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i;
+
+function normalizeBaseUrl(rawValue: string | undefined) {
+  const trimmed = rawValue?.trim().replace(/^['"]|['"]$/g, "");
+  if (!trimmed) return undefined;
+
+  const withoutTrailingSlash = trimmed.replace(/\/$/, "");
+  if (withoutTrailingSlash.startsWith("/") || ABSOLUTE_URL_PATTERN.test(withoutTrailingSlash)) {
+    return withoutTrailingSlash;
+  }
+
+  const scheme = import.meta.env.PROD && !LOCAL_HOST_PATTERN.test(withoutTrailingSlash) ? "https://" : "http://";
+  return `${scheme}${withoutTrailingSlash}`;
+}
+
+const NORMALIZED_CONFIGURED_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const API_BASE_URL = (
   import.meta.env.PROD && NORMALIZED_CONFIGURED_API_BASE_URL === RENDER_API_BASE_URL
     ? "/backend"
     : NORMALIZED_CONFIGURED_API_BASE_URL || DEFAULT_API_BASE_URL
 ).replace(/\/$/, "");
-const CONFIGURED_MEERTIME_PROXY_URL = import.meta.env.VITE_MEERTIME_PROXY_URL?.trim();
+const CONFIGURED_MEERTIME_PROXY_URL = normalizeBaseUrl(import.meta.env.VITE_MEERTIME_PROXY_URL);
 const MEERTIME_PROXY_URL = (CONFIGURED_MEERTIME_PROXY_URL || `${API_BASE_URL}/meertime-proxy`).replace(/\/$/, "");
 const MEERTIME_HOST = "psrweb.jb.man.ac.uk";
 const PLOTS_MARKER = "/plots/";

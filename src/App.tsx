@@ -79,6 +79,7 @@ const ARTIFICIAL_LOADING_DELAY_MS = import.meta.env.DEV
   ? getNonNegativeNumberEnv(import.meta.env.VITE_TEST_LOADING_DELAY_MS, 0)
   : 0;
 const TOTAL_INTENSITY_VIEW_VERSION = 20;
+const LOCAL_FILE_REFERENCE_PATTERN = /^(?:file:|[a-zA-Z]:[\\/]|\\\\)/;
 
 type AnalysisSectionKey = "totalIntensity" | "integrated" | "selectedPulse" | "allPulsesPhase" | "rvmFit" | "hist2d" | "pulseStacks" | "phaseSlices";
 
@@ -159,6 +160,10 @@ function getErrorMessage(error: unknown) {
 
 function isRemoteAuthFailure(error: unknown) {
   return error instanceof Error && /\((401|403)\)/.test(error.message);
+}
+
+function isLocalFileReference(value: string) {
+  return LOCAL_FILE_REFERENCE_PATTERN.test(value.trim());
 }
 
 const App: React.FC = () => {
@@ -545,6 +550,13 @@ const App: React.FC = () => {
     if (!remoteUrl) {
       setInputLoadError("Please fill in the URL.");
       console.warn("Please fill in the URL.");
+      return;
+    }
+
+    if (isLocalFileReference(remoteUrl)) {
+      const message = "Local file paths cannot be loaded from the URL field. Use Browse to choose the .npz/.npy file.";
+      setInputLoadError(message);
+      console.warn(message);
       return;
     }
 
@@ -1352,6 +1364,23 @@ const App: React.FC = () => {
     setLoadDataOpen(true);
   };
 
+  const controlsPanelOpen = activePage === "analysis" && !sidebarCollapsed;
+
+  const handleToggleControlsPanel = () => {
+    if (controlsPanelOpen) {
+      setSidebarCollapsed(true);
+      return;
+    }
+
+    setActivePage("analysis");
+    setSidebarCollapsed(false);
+  };
+
+  const handleOpenReadMe = () => {
+    setActivePage("readme");
+    setSidebarCollapsed(true);
+  };
+
   const renderSectionHeading = (sectionKey: AnalysisSectionKey, title: string, state: PlotRequestViewState) => (
     <CollapsibleTrigger asChild>
       <button
@@ -1380,23 +1409,24 @@ const App: React.FC = () => {
       />
       <main className="page-shell w-full p-0">
         <div
-          className={`analysis-workspace ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}
+          className={`analysis-workspace ${controlsPanelOpen ? "is-sidebar-open" : "is-sidebar-collapsed"}`}
           style={{ ["--analysis-sidebar-width" as string]: `${sidebarWidth}px` }}
         >
-        <aside className="analysis-sidebar" aria-label="Analysis controls">
           <button
             type="button"
-            className="analysis-sidebar-collapse"
-            onClick={() => setSidebarCollapsed(current => !current)}
-            aria-label={sidebarCollapsed ? "Expand analysis sidebar" : "Collapse analysis sidebar"}
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={`analysis-controls-toggle ${controlsPanelOpen ? "is-open" : "is-collapsed"}`}
+            onClick={handleToggleControlsPanel}
+            aria-label={controlsPanelOpen ? "Collapse analysis controls" : "Expand analysis controls"}
+            aria-expanded={controlsPanelOpen}
+            title={controlsPanelOpen ? "Collapse controls" : "Expand controls"}
           >
-            {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            {controlsPanelOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
-          {!sidebarCollapsed && (
+        <aside className="analysis-sidebar" aria-label="Analysis controls" aria-hidden={!controlsPanelOpen}>
+          {controlsPanelOpen && (
           <div className="analysis-sidebar-scroll">
           <Collapsible open={loadDataOpen} onOpenChange={setLoadDataOpen}>
-          <section className="upload-stage sidebar-section">
+          <section className="upload-stage sidebar-section sidebar-module">
           <CollapsibleTrigger asChild>
             <button type="button" className="section-heading-row collapsible-section-trigger mb-3" aria-expanded={loadDataOpen}>
               <span className="inline-flex min-w-0 items-center gap-2">
@@ -1405,8 +1435,7 @@ const App: React.FC = () => {
               </span>
             </button>
           </CollapsibleTrigger>
-          {loadDataOpen && (
-          <CollapsibleContent>
+          <CollapsibleContent className="sidebar-collapsible-content">
           <div className="grid grid-cols-1 gap-4">
                 <div className="flex flex-col gap-2">
                   <Label className="form-label text-foreground">Upload file</Label>
@@ -1501,12 +1530,11 @@ const App: React.FC = () => {
                 </div>
           </div>
         </CollapsibleContent>
-          )}
         </section>
         </Collapsible>
 
         {hasLoadedData && (
-            <section className="sidebar-section">
+            <section className="sidebar-section sidebar-module phase-sidebar-module">
               <Collapsible defaultOpen className="phase-control-bar">
                 <div className="phase-control-shell">
                   <div className="phase-control-header">
@@ -1616,7 +1644,7 @@ const App: React.FC = () => {
         )}
           </div>
           )}
-          {!sidebarCollapsed && (
+          {controlsPanelOpen && (
             <div
               className="analysis-sidebar-resizer"
               role="separator"
@@ -1644,7 +1672,7 @@ const App: React.FC = () => {
                   <button type="button" className={`app-nav-button ${activePage === "analysis" ? "is-active" : ""}`} onClick={handleOpenLoadData}>
                     Analysis
                   </button>
-                  <button type="button" className={`app-nav-button ${activePage === "readme" ? "is-active" : ""}`} onClick={() => setActivePage("readme")}>
+                  <button type="button" className={`app-nav-button ${activePage === "readme" ? "is-active" : ""}`} onClick={handleOpenReadMe}>
                     Read Me
                   </button>
                 </nav>
@@ -1689,30 +1717,6 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-8">
-              {/* Total intensity evolution */}
-              <section className="scientific-section section-plain">
-                    <Collapsible open={openSections.totalIntensity} onOpenChange={open => setOpenSections(current => ({ ...current, totalIntensity: open }))}>
-                    {renderSectionHeading("totalIntensity", "Total Intensity Evolution", totalIntensityState)}
-                    {openSections.totalIntensity && (
-                    <CollapsibleContent>
-                    <div className="mt-4 w-full">
-                      <PlotResultSlot state={totalIntensityState} label="Total intensity evolution" hasData={!!totalIntensityData} deferUntilVisible placeholderMinHeight="40rem">
-                        <ErrorBoundary>
-                          {totalIntensityData && (
-                            <TotalIntensityEvolution
-                              data={totalIntensityData}
-                              isDark={totalIntensityPlotThemeIsDark}
-                              filenamePrefix={observationFilenameBase}
-                            />
-                          )}
-                        </ErrorBoundary>
-                      </PlotResultSlot>
-                    </div>
-                    </CollapsibleContent>
-                    )}
-                    </Collapsible>
-              </section>
-
               {/* Integrated pulse profile polarisation state evolution */}
               <section className="scientific-section section-plain">
                     <Collapsible open={openSections.integrated} onOpenChange={open => setOpenSections(current => ({ ...current, integrated: open }))}>
@@ -2004,6 +2008,30 @@ const App: React.FC = () => {
                     </Collapsible>
               </section>
 
+              {/* Total intensity evolution */}
+              <section className="scientific-section section-plain">
+                    <Collapsible open={openSections.totalIntensity} onOpenChange={open => setOpenSections(current => ({ ...current, totalIntensity: open }))}>
+                    {renderSectionHeading("totalIntensity", "Total Intensity Evolution (Experimental)", totalIntensityState)}
+                    {openSections.totalIntensity && (
+                    <CollapsibleContent>
+                    <div className="mt-4 w-full">
+                      <PlotResultSlot state={totalIntensityState} label="Total intensity evolution" hasData={!!totalIntensityData} deferUntilVisible placeholderMinHeight="40rem">
+                        <ErrorBoundary>
+                          {totalIntensityData && (
+                            <TotalIntensityEvolution
+                              data={totalIntensityData}
+                              isDark={totalIntensityPlotThemeIsDark}
+                              filenamePrefix={observationFilenameBase}
+                            />
+                          )}
+                        </ErrorBoundary>
+                      </PlotResultSlot>
+                    </div>
+                    </CollapsibleContent>
+                    )}
+                    </Collapsible>
+              </section>
+
             </div>
           </>
         )}
@@ -2015,7 +2043,28 @@ const App: React.FC = () => {
 };
 
 function ReadMePage() {
-  return <section className="info-page" aria-label="Read Me" />;
+  return (
+    <section className="info-page readme-page" aria-label="Read Me document">
+      <article className="readme-document">
+        <p>
+          This README area is reserved for the project notes, operating instructions, citations, and deployment details
+          that should travel with the analysis workspace.
+        </p>
+        <p>
+          Placeholder text can be replaced with a concise overview of the data format, the expected backend service,
+          authentication requirements, and the recommended workflow for loading and analysing single-pulse observations.
+        </p>
+        <p>
+          Add setup commands, environment variables, known limitations, and interpretation notes here. Keep the content
+          plain and readable, like a document, so users can scan it without leaving the application.
+        </p>
+        <p>
+          Future documentation can include examples for local files, MeerTime URLs, phase-window selection, plot exports,
+          and deployment-specific backend configuration.
+        </p>
+      </article>
+    </section>
+  );
 }
 
 export default App;

@@ -2,7 +2,7 @@
 
 ## Deployment configuration
 
-Set `VITE_API_BASE_URL` to the FastAPI backend base URL. MeerTime file requests are proxied through `${VITE_API_BASE_URL}/meertime-proxy` by default, so non-Vercel deployments do not need a Vercel `/api` function.
+Set `VITE_API_BASE_URL` to the FastAPI backend base URL, including the scheme, for example `http://127.0.0.1:8000` for local development. MeerTime file requests are proxied through `${VITE_API_BASE_URL}/meertime-proxy` by default, so non-Vercel deployments do not need a Vercel `/api` function.
 
 Set `VITE_BACKEND_RESOURCE_PROFILE` to control how aggressively the frontend queues plot requests:
 
