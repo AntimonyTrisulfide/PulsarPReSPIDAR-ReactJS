@@ -23,7 +23,12 @@ export const POLARIMETRY_ENDPOINTS = {
 } as const;
 
 const RENDER_API_BASE_URL = "https://pulsarprespidar-fastapi-phar.onrender.com";
-const DEFAULT_API_BASE_URL = import.meta.env.PROD ? "/backend" : "http://localhost:8000";
+function getDefaultProductionApiBaseUrl() {
+  const basePath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  return `${basePath}/api`;
+}
+
+const DEFAULT_API_BASE_URL = import.meta.env.PROD ? getDefaultProductionApiBaseUrl() : "http://localhost:8000";
 const ABSOLUTE_URL_PATTERN = /^[a-z][a-z\d+\-.]*:\/\//i;
 const LOCAL_HOST_PATTERN = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i;
 
@@ -43,7 +48,7 @@ function normalizeBaseUrl(rawValue: string | undefined) {
 const NORMALIZED_CONFIGURED_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
 const API_BASE_URL = (
   import.meta.env.PROD && NORMALIZED_CONFIGURED_API_BASE_URL === RENDER_API_BASE_URL
-    ? "/backend"
+    ? DEFAULT_API_BASE_URL
     : NORMALIZED_CONFIGURED_API_BASE_URL || DEFAULT_API_BASE_URL
 ).replace(/\/$/, "");
 const CONFIGURED_MEERTIME_PROXY_URL = normalizeBaseUrl(import.meta.env.VITE_MEERTIME_PROXY_URL);
